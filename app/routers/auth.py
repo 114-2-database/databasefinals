@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db.session import SessionLocal
 from app.models import Student
 
 router = APIRouter()
