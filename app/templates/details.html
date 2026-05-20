@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header mb-4">
+  <div class="page-header-inner">
+    <div>
+      <p class="page-eyebrow">修課明細</p>
+      <h1 class="page-title">課程達標清單</h1>
+      <p class="page-desc">通識與體育課程的逐項達標狀況</p>
+    </div>
+    <a class="btn-ghost" href="/dashboard">← 回總覽</a>
+  </div>
+</div>
+
+{# Tab 切換 #}
+<div class="tab-bar mb-4">
+  {% set cats = [
+    ("all",    "全部"),
+    ("HUM",    "人文通識"),
+    ("SOC",    "社會通識"),
+    ("NAT",    "自然通識"),
+    ("INFO",   "資訊通識"),
+    ("COL",    "書院通識"),
+    ("CHI",    "中文通識"),
+    ("ENG",    "英文通識"),
+    ("PE",     "體育")
+  ] %}
+  {% for key, label in cats %}
+  <button class="tab-btn {% if loop.first %}active{% endif %}"
+    onclick="switchTab('{{ key }}', this)">{{ label }}</button>
+  {% endfor %}
+</div>
+
+{# 課程列表 — 依 sub_category 篩選 #}
+{% for key, label in [("all","全部"),("HUM","人文通識"),("SOC","社會通識"),("NAT","自然通識"),("INFO","資訊通識"),("COL","書院通識"),("CHI","中文通識"),("ENG","英文通識"),("PE","體育")] %}
+<div id="panel-{{ key }}" class="tab-panel" style="{{ 'display:block' if loop.first else 'display:none' }}">
+
+  {% if key == "all" %}
+    {% set panel_items = items %}
+  {% else %}
+    {% set panel_items = items | selectattr("item.sub_category", "equalto", key) | list %}
+  {% endif %}
+
+  {% set done = panel_items | selectattr("passed") | list | length %}
+  {% set total = panel_items | length %}
+
+  {% if panel_items %}
+  <div class="detail-summary mb-3">
+    共 <b>{{ total }}</b> 門課 ·
+    已達標 <b class="text-ok">{{ done }}</b> 門 ·
+    未完成 <b class="text-ng">{{ total - done }}</b> 門
+  </div>
+  <div class="detail-card">
+    <div class="detail-header-row">
+      <div class="dh-idx">#</div>
+      <div class="dh-name">課程名稱</div>
+      <div class="dh-cat">通識領域</div>
+      <div class="dh-core">類型</div>
+      <div class="dh-credit">學分</div>
+      <div class="dh-status">狀態</div>
+    </div>
+    {% for row in panel_items %}
+    <div class="detail-row {% if loop.last %}detail-row-last{% endif %}">
+      <div class="detail-row-index">{{ loop.index }}</div>
+      <div class="detail-row-name">{{ row.item.title }}</div>
+      <div class="detail-row-cat">
+        {% if row.item.sub_category == "HUM" %}人文通識
+        {% elif row.item.sub_category == "SOC" %}社會通識
+        {% elif row.item.sub_category == "NAT" %}自然通識
+        {% elif row.item.sub_category == "INFO" %}資訊通識
+        {% elif row.item.sub_category == "COL" %}書院通識
+        {% elif row.item.sub_category == "CHI" %}中文通識
+        {% elif row.item.sub_category == "ENG" %}英文通識
+        {% elif row.item.sub_category == "PE" %}體育
+        {% else %}—{% endif %}
+      </div>
+      <div class="detail-row-core">
+        {% if row.item.is_core %}
+        <span class="core-badge">核心</span>
+        {% else %}
+        <span class="gen-badge">一般</span>
+        {% endif %}
+      </div>
+      <div class="detail-row-credit">{{ row.item.credits }} 學分</div>
+      <div class="detail-row-status">
+        {% if row.passed %}
+        <span class="status-badge status-ok">✓ 完成</span>
+        {% else %}
+        <span class="status-badge status-ng">✗ 未完成</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">📭</div>
+    <p>此類別尚無課程資料</p>
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<script>
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + name).style.display = 'block';
+  btn.classList.add('active');
+}
+</script>
+
+{% endblock %}

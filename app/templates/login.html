@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="login-page">
+  <div class="login-box">
+
+    <!-- 校徽 + 校名 -->
+    <div class="login-hero">
+      <img src="/static/img/emblem.jpg" alt="國立政治大學校徽" width="96" height="96" style="border-radius:50%; object-fit:cover;" />
+      <div class="login-school">國立政治大學</div>
+      <div class="login-tagline">通識體育畢業離校檢核系統</div>
+    </div>
+
+    <!-- 表單卡片 -->
+    <div class="login-card">
+      <div class="login-card-title">學生登入</div>
+      <div class="login-card-sub">請輸入你的學號與密碼</div>
+
+      {% if error %}
+      <div class="login-error">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink:0">
+          <circle cx="8" cy="8" r="7" stroke="#cf1322" stroke-width="1.5"/>
+          <path d="M8 4.5V8.5M8 11h.01" stroke="#cf1322" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        {{ error }}
+      </div>
+      {% endif %}
+
+      <form method="post" action="/login">
+        <div class="form-group">
+          <label class="form-label-custom">學號</label>
+          <input class="form-input" name="student_no"
+            placeholder="110XXXXXX" autocomplete="username" required />
+        </div>
+        <div class="form-group">
+          <label class="form-label-custom">密碼</label>
+          <input type="password" class="form-input" name="password"
+            placeholder="••••••••" autocomplete="current-password" required />
+        </div>
+        <button class="btn-primary-custom" type="submit">登入</button>
+      </form>
+
+      <p class="login-help">如有問題請洽各學院教學助理</p>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}
