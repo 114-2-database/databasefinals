@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -29,49 +29,55 @@ async def root():
     return RedirectResponse(url="/login", status_code=302)
 
 
-# @router.get("/dashboard")
-# async def dashboard(request: Request, db: Session = Depends(get_db)):
-#     student = get_current_student(request, db)
-#     if not student:
-#         return RedirectResponse(url="/login", status_code=302)
-
-#     items = (
-#         db.query(StudentCheckItem)
-#         .join(CheckItem, StudentCheckItem.item_id == CheckItem.id)
-#         .filter(StudentCheckItem.student_id == student.id)
-#         .all()
-#     )
-#     ge_total = sum(1 for i in items if i.item.category == "GE")
-#     ge_passed = sum(1 for i in items if i.item.category == "GE" and i.passed)
-#     pe_total = sum(1 for i in items if i.item.category == "PE")
-#     pe_passed = sum(1 for i in items if i.item.category == "PE" and i.passed)
-
-#     return request.app.state.templates.TemplateResponse(
-#         "dashboard.html",
-#         {
-#             "request": request,
-#             "student": student,
-#             "ge_total": ge_total,
-#             "ge_passed": ge_passed,
-#             "pe_total": pe_total,
-#             "pe_passed": pe_passed,
-#         },
-#     )
+def _demo_student() -> dict:
+    return {
+        "name": "Demo Student",
+        "department": "General Studies",
+        "double_minor": "",
+    }
 
 
-# @router.get("/details")
-# async def details(request: Request, db: Session = Depends(get_db)):
-#     student = get_current_student(request, db)
-#     if not student:
-#         return RedirectResponse(url="/login", status_code=302)
+def _demo_dashboard_context() -> dict:
+    return {
+        "total_counted_credits": 0,
+        "humanities_credits": 0,
+        "humanities_core_credits": 0,
+        "social_credits": 0,
+        "social_core_credits": 0,
+        "natural_credits": 0,
+        "natural_core_credits": 0,
+        "info_credits": 0,
+        "college_credits": 0,
+        "chinese_credits": 0,
+        "english_credits": 0,
+        "pe_credits": 0,
+    }
 
-#     items = (
-#         db.query(StudentCheckItem)
-#         .join(CheckItem, StudentCheckItem.item_id == CheckItem.id)
-#         .filter(StudentCheckItem.student_id == student.id)
-#         .all()
-#     )
-#     return request.app.state.templates.TemplateResponse(
-#         "details.html",
-#         {"request": request, "student": student, "items": items},
-#     )
+
+@router.get("/login")
+async def login(request: Request):
+    return request.app.state.templates.TemplateResponse(
+        "login.html",
+        {"request": request},
+    )
+
+
+@router.get("/dashboard")
+async def dashboard(request: Request):
+    context = {"request": request, "student": _demo_student()}
+    context.update(_demo_dashboard_context())
+    return request.app.state.templates.TemplateResponse("dashboard.html", context)
+
+
+@router.get("/details")
+async def details(request: Request):
+    return request.app.state.templates.TemplateResponse(
+        "details.html",
+        {"request": request, "student": _demo_student(), "items": []},
+    )
+
+
+@router.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=302)
