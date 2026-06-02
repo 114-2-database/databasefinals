@@ -1,19 +1,15 @@
-"""Graduation credit audit helpers.
+"""
+畢業學分審核工具
 
-The public entry point is :func:`calculate_score`. Given a database session
-and a student id, it inspects the student's passed classes and the
-requirements of their main department and reports progress against every
-general-education category, plus PE and the overall total.
+主要入口為 :func:`calculate_score`，傳入資料庫 session 與學生 ID，
+讀取該學生的修課紀錄與所屬科系的畢業門檻，回傳各通識類別、體育及總學分的達標狀況。
 
-A class's ``remark`` may now list up to three GE categories separated by
-``、`` or ``,`` (e.g. ``"社會通、人文通"``). The class's credits count toward
-exactly one of those categories — the one the student picked. The pick is
-read from ``SelectedClass.chosen_category`` (a string, holding either a
-canonical category key like ``"social"`` or the Chinese label like
-``"社會通"``). If the column is absent or unset, the first listed category
-is used as a fallback so credits are never silently dropped.
+課程的 ``remark`` 欄位可用 ``、`` 或 ``,`` 列出最多三個通識類別（例如 ``"社會通、人文通"``）。
+學分只能計入其中一個類別，由 ``SelectedClass.chosen_category`` 決定（可填類別代號如
+``"social"``，或中文名稱如 ``"社會通"``）。若該欄位尚未設定，則自動採用 remark 中
+第一個類別作為預設值，避免學分被忽略。
 
-Router usage::
+Router 使用範例:
 
     from app.core.algorithms import calculate_score
 
@@ -24,9 +20,13 @@ Router usage::
             return {"error": "User not logged in"}
         return calculate_score(db, student_id)
 
-NOTE: this module expects ``SelectedClass.chosen_category: str | None`` to
-exist on the model. Until that column is added, every multi-category class
-will fall back to its first listed category.
+NOTE/TODO: 
+    - 需要 ``SelectedClass.chosen_category: str | None`` 欄位存在於 model 中
+      (在該欄位加入之前，所有多類別課程將自動採用第一個列出的類別)
+    
+    - 沒有 min & max 版本的通識種類都暫時被當 min (如: humanities 和 foreign)
+
+    - ER-Diagram 裡面用 collegeEnglishExemption 來表示大學英文免修，但在 model 裡面用 eng_passed 來表示，所以這邊暫時用 eng_passed
 """
 
 from __future__ import annotations
@@ -195,6 +195,23 @@ class PEStatus:
     shortfall: int
 
 
+@dataclass
+class CoreGEStatus:
+    # Number of distinct GE categories (人文/社會/自然) where the student
+    # has passed at least one 核心通識 course.
+    earned_categories: int
+    required_categories: int
+    earned_category_list: list   # which category keys are covered
+    met: bool
+    shortfall: int
+
+
+# Only 人文、社會、自然 have 核心通識 courses.
+_CORE_GE_BUCKETS: frozenset[str] = frozenset({HUMANITIES, SOCIAL, SCIENCES})
+
+CORE_GE_REQUIRED = 2
+
+
 def _empty_credits() -> dict[str, int]:
     return {
         HUMANITIES: 0, SOCIAL: 0, SCIENCES: 0, COMPUTER: 0,
@@ -206,7 +223,7 @@ def tally_credits(
     selections: Iterable[SelectedClass],
     student: Student,
     department: Department,
-) -> tuple[dict[str, int], dict[str, int], int]:
+) -> tuple[dict[str, int], set, int]:
     """Walk a student's passed selections and bucket their credits.
 
     For each selection we look up the student's chosen category (or the
@@ -222,10 +239,14 @@ def tally_credits(
     * PE → counted as a course toward ``pe_courses`` (not credits).
     * everything else → counted toward its chosen category.
 
-    Returns ``(credits, core_credits, pe_courses)``.
+    Also tracks ``core_categories``: the set of distinct GE category keys
+    (limited to 人文/社會/自然) where the student has passed at least one
+    ``Class.core = True`` course.
+
+    Returns ``(credits, core_categories, pe_courses)``.
     """
     credits = _empty_credits()
-    core_credits = _empty_credits()
+    core_categories: set[str] = set()
     pe_courses = 0
 
     computer_exempt = is_exempt_from_computer(department)
@@ -260,10 +281,10 @@ def tally_credits(
             bucket = category
 
         credits[bucket] += class_.credits
-        if class_.core:
-            core_credits[bucket] += class_.credits
+        if class_.core and bucket in _CORE_GE_BUCKETS:
+            core_categories.add(bucket)
 
-    return credits, core_credits, pe_courses
+    return credits, core_categories, pe_courses
 
 
 # --- Requirement evaluation --------------------------------------------------
@@ -286,6 +307,7 @@ def _status(earned: int, required: int, maximum: int | None) -> CategoryStatus:
 
 def evaluate(
     credits: dict[str, int],
+    core_categories: set[str],
     pe_courses: int,
     department: Department,
 ) -> dict:
@@ -312,6 +334,15 @@ def evaluate(
         shortfall=max(department.pe - pe_courses, 0),
     )
 
+    earned_core = len(core_categories)
+    core_ge_status = CoreGEStatus(
+        earned_categories=earned_core,
+        required_categories=CORE_GE_REQUIRED,
+        earned_category_list=sorted(core_categories),
+        met=earned_core >= CORE_GE_REQUIRED,
+        shortfall=max(CORE_GE_REQUIRED - earned_core, 0),
+    )
+
     # Total excluding PE: sum each bucket capped at its ``maximum``, so
     # over-earning in one area cannot paper over a deficit in another.
     counted_total = sum(s.counted for s in categories.values())
@@ -326,10 +357,12 @@ def evaluate(
 
     return {
         "categories": {k: asdict(v) for k, v in categories.items()},
+        "core_ge": asdict(core_ge_status),
         "pe": asdict(pe_status),
         "total_excluding_pe": asdict(total_status),
         "graduation_ready": (
             all(s.met for s in categories.values())
+            and core_ge_status.met
             and pe_status.met
             and total_status.met
         ),
@@ -358,9 +391,97 @@ def calculate_score(db: Session, student_id: int) -> dict:
         return {"error": "department not found", "student_id": student_id}
 
     selections = get_passed_selections(db, student_id)
-    credits, core_credits, pe_courses = tally_credits(selections, student, department)
-    result = evaluate(credits, pe_courses, department)
+    credits, core_categories, pe_courses = tally_credits(selections, student, department)
+    result = evaluate(credits, core_categories, pe_courses, department)
     result["student_id"] = student.id
     result["main_department_id"] = department.id
-    result["core_credits"] = core_credits
     return result
+
+
+""" output example:
+{
+  "categories": {
+    "humanities": {
+      "earned": 5,      # 修了多少學分的課 (不考慮上限)
+      "counted": 5,     # 實際算了多少學分
+      "required": 3,    # 此類別需要多少學分
+      "maximum": null,  # 此類別的學分上限 (null 則無上限)
+      "met": true,      # 是否達標 (earned >= required)
+      "shortfall": 0    # 距離達標還差多少學分 (如果已達標則為0)
+    },
+    "social": {
+      "earned": 2,
+      "counted": 2,
+      "required": 3,
+      "maximum": 7,
+      "met": false,
+      "shortfall": 1
+    },
+    "sciences": {
+      "earned": 3,
+      "counted": 3,
+      "required": 3,
+      "maximum": 7,
+      "met": true,
+      "shortfall": 0
+    },
+    "computer": {
+      "earned": 0,
+      "counted": 0,
+      "required": 2,
+      "maximum": 3,
+      "met": false,
+      "shortfall": 2
+    },
+    "residential": {
+      "earned": 0,
+      "counted": 0,
+      "required": 0,
+      "maximum": 3,
+      "met": true,
+      "shortfall": 0
+    },
+    "chinese": {
+      "earned": 3,
+      "counted": 3,
+      "required": 3,
+      "maximum": 6,
+      "met": true,
+      "shortfall": 0
+    },
+    "english": {
+      "earned": 6,
+      "counted": 6,
+      "required": 6,
+      "maximum": null,
+      "met": true,
+      "shortfall": 0
+    }
+  },
+  "core_ge": {
+    "earned_categories": 1,             # 修了幾個核通類別
+    "required_categories": 2,           # 需要修幾個核通類別
+    "earned_category_list": ["social"], # 修了哪些核通類別
+    "met": false,                       # 是否達標 (earned >= required)
+    "shortfall": 1                      # 差多少達標
+  },
+  "pe": {
+    "earned_courses": 1,
+    "required_courses": 4,
+    "met": false,
+    "shortfall": 3
+  },
+  "total_excluding_pe": {
+    "earned": 19,
+    "counted": 19,
+    "required": 28,
+    "maximum": null,
+    "met": false,
+    "shortfall": 9
+  },
+  "graduation_ready": false,
+  "student_id": 1,
+  "main_department_id": 2
+}
+
+"""
