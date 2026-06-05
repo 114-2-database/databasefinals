@@ -93,6 +93,9 @@ _REMARK_TO_CATEGORY: dict[str, str] = {
 # Accept Chinese 、, Chinese ，, ASCII , or whitespace runs as separators.
 _REMARK_SPLIT_RE = re.compile(r"[、，,/]+|\s{2,}")
 
+# 比對大學外文課程名稱，抓出學期和語種，例如 "大學外文（一）：日文" → ("一", "日文")
+_FOREIGN_LANG_RE = re.compile(r"大學外文（([一二])）：(.+)")
+
 
 def _normalize(text: str | None) -> str | None:
     if not text:
@@ -139,6 +142,20 @@ def categorize_selection(
         return chosen
 
     return options[0]
+
+
+def _parse_foreign_lang(name: str | None) -> tuple[str, str] | None:
+    """從大學外文課程名稱解析出學期和語種。
+
+    例如 "大學外文（一）：日文" → ("一", "日文")
+    無法解析（非外文課程格式）則回傳 None。
+    """
+    if not name:
+        return None
+    m = _FOREIGN_LANG_RE.match(name.strip())
+    if m:
+        return m.group(1), m.group(2)  # (學期, 語種)
+    return None
 
 
 # --- Exemption helpers -------------------------------------------------------
@@ -206,6 +223,17 @@ class CoreGEStatus:
     shortfall: int
 
 
+@dataclass
+class ForeignPairStatus:
+    # 免修大學英文者需以「同語種大學外文（一）＋（二）」補足 6 學分。
+    # 僅在 student.eng_passed = True 時有意義。
+    language: str | None        # 配對成功的語種（如 "日文"）；無有效配對則為 None
+    has_first_sem: bool         # 是否有（一）
+    has_second_sem: bool        # 是否有（二）
+    valid: bool                 # （一）和（二）皆有，且同語種，才算有效
+    credits: int                # 計入 english bucket 的學分（無效配對為 0）
+
+
 # Only 人文、社會、自然 have 核心通識 courses.
 _CORE_GE_BUCKETS: frozenset[str] = frozenset({HUMANITIES, SOCIAL, SCIENCES})
 
@@ -219,35 +247,66 @@ def _empty_credits() -> dict[str, int]:
     }
 
 
+def _validate_foreign_pair(foreign_classes: list[Class]) -> ForeignPairStatus:
+    """驗證大學外文課程是否符合「同語種（一）＋（二）」規則。
+
+    將傳入的外文課按語種分組，找到第一個同時有（一）和（二）的語種視為有效配對。
+    若無有效配對，回傳進度最近的語種狀態（credits = 0）。
+    """
+    # {語種: {學期: 學分}}，例如 {"日文": {"一": 3, "二": 3}}
+    groups: dict[str, dict[str, int]] = {}
+    for cls in foreign_classes:
+        parsed = _parse_foreign_lang(cls.name)
+        if not parsed:
+            continue
+        sem, lang = parsed
+        if lang not in groups:
+            groups[lang] = {}
+        groups[lang][sem] = cls.credits
+
+    # 找第一個有效配對
+    for lang, sems in groups.items():
+        if "一" in sems and "二" in sems:
+            return ForeignPairStatus(
+                language=lang,
+                has_first_sem=True,
+                has_second_sem=True,
+                valid=True,
+                credits=sems["一"] + sems["二"],
+            )
+
+    # 無有效配對：回傳學分最多的語種作為候選（方便前端顯示進度）
+    if not groups:
+        return ForeignPairStatus(
+            language=None, has_first_sem=False, has_second_sem=False, valid=False, credits=0
+        )
+    best = max(groups, key=lambda l: sum(groups[l].values()))
+    return ForeignPairStatus(
+        language=best,
+        has_first_sem="一" in groups[best],
+        has_second_sem="二" in groups[best],
+        valid=False,
+        credits=0,
+    )
+
+
 def tally_credits(
     selections: Iterable[SelectedClass],
     student: Student,
     department: Department,
-) -> tuple[dict[str, int], set, int]:
+) -> tuple[dict[str, int], set, int, ForeignPairStatus]:
     """Walk a student's passed selections and bucket their credits.
 
-    For each selection we look up the student's chosen category (or the
-    first-listed fallback) and route the class's credits into one bucket
-    only, applying the exemption rules:
+    免修英文者（eng_passed = True）的大學外文課程不直接計入 english，
+    而是在迴圈結束後透過 _validate_foreign_pair 驗證「同語種（一）＋（二）」
+    配對，只有有效配對的學分才計入。
 
-    * 資訊 (chosen, single- or multi-category) → skipped if the dept is
-      computer-exempt; otherwise counted toward ``computer``.
-    * 大學英文 → skipped if the student is English-exempt; otherwise
-      counted toward ``english``.
-    * 大學外文 → only counted (toward ``english``) if the student is
-      English-exempt; ignored otherwise.
-    * PE → counted as a course toward ``pe_courses`` (not credits).
-    * everything else → counted toward its chosen category.
-
-    Also tracks ``core_categories``: the set of distinct GE category keys
-    (limited to 人文/社會/自然) where the student has passed at least one
-    ``Class.core = True`` course.
-
-    Returns ``(credits, core_categories, pe_courses)``.
+    Returns ``(credits, core_categories, pe_courses, foreign_pair_status)``.
     """
     credits = _empty_credits()
     core_categories: set[str] = set()
     pe_courses = 0
+    foreign_classes: list[Class] = []
 
     computer_exempt = is_exempt_from_computer(department)
     english_exempt = is_exempt_from_english(student)
@@ -276,7 +335,9 @@ def tally_credits(
         elif category == FOREIGN_ALT:
             if not english_exempt:
                 continue
-            bucket = ENGLISH
+            # 先收集，迴圈後驗證配對
+            foreign_classes.append(class_)
+            continue
         else:
             bucket = category
 
@@ -284,7 +345,11 @@ def tally_credits(
         if class_.core and bucket in _CORE_GE_BUCKETS:
             core_categories.add(bucket)
 
-    return credits, core_categories, pe_courses
+    # 驗證外文配對並計入 english
+    foreign_pair = _validate_foreign_pair(foreign_classes)
+    credits[ENGLISH] += foreign_pair.credits
+
+    return credits, core_categories, pe_courses, foreign_pair
 
 
 # --- Requirement evaluation --------------------------------------------------
@@ -310,6 +375,7 @@ def evaluate(
     core_categories: set[str],
     pe_courses: int,
     department: Department,
+    foreign_pair: ForeignPairStatus,
 ) -> dict:
     """Compare aggregated credits against the department's requirements."""
     categories: dict[str, CategoryStatus] = {
@@ -358,6 +424,7 @@ def evaluate(
     return {
         "categories": {k: asdict(v) for k, v in categories.items()},
         "core_ge": asdict(core_ge_status),
+        "foreign_pair": asdict(foreign_pair),
         "pe": asdict(pe_status),
         "total_excluding_pe": asdict(total_status),
         "graduation_ready": (
@@ -391,8 +458,8 @@ def calculate_score(db: Session, student_id: int) -> dict:
         return {"error": "department not found", "student_id": student_id}
 
     selections = get_passed_selections(db, student_id)
-    credits, core_categories, pe_courses = tally_credits(selections, student, department)
-    result = evaluate(credits, core_categories, pe_courses, department)
+    credits, core_categories, pe_courses, foreign_pair = tally_credits(selections, student, department)
+    result = evaluate(credits, core_categories, pe_courses, department, foreign_pair)
     result["student_id"] = student.id
     result["main_department_id"] = department.id
     return result
@@ -464,6 +531,13 @@ def calculate_score(db: Session, student_id: int) -> dict:
     "earned_category_list": ["social"], # 修了哪些核通類別
     "met": false,                       # 是否達標 (earned >= required)
     "shortfall": 1                      # 差多少達標
+  },
+  "foreign_pair": {                     # 僅對 免修英文的人 有意義
+    "language": "日文",                 # 目前修最多堂的語言 (沒有的話 null)
+    "has_first_sem": true,              # 是否有大學外文（一）
+    "has_second_sem": true,             # 是否有大學外文（二）
+    "valid": true,                      # 外文（一）、（二）皆有且同語言才有效
+    "credits": 6                        # 計入 english 的學分
   },
   "pe": {
     "earned_courses": 1,
