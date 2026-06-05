@@ -39,7 +39,7 @@ async def login_submit(
     hashed = hash_password(password)
     student = (
         db.query(Student)
-        .filter(Student.student_no == student_no, Student.password_hash == hashed)
+        .filter(Student.email == student_no, Student.hashed_password == hashed)
         .first()
     )
     if not student:
