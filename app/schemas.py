@@ -6,4 +6,4 @@ class LoginForm(BaseModel):
     password: str
 
 class DetailType(BaseModel):
-    type: str
+    type_: str
