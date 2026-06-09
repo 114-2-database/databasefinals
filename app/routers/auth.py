@@ -173,8 +173,8 @@ def details(data: DetailType, payload: dict = Depends(verify_token), db: Session
         .join(Class)
         .filter(SelectedClass.studentid == student_id)
     )
-    if data.type != "all":
-        query = query.filter(Class.remark == data.type)
+    if data.type_ != "all":
+        query = query.filter(Class.remark == data.type_)
         
     selected_class = query.all()
     selected_classes_info = []
@@ -191,7 +191,7 @@ def details(data: DetailType, payload: dict = Depends(verify_token), db: Session
         "StatusCode": 200,
         "Message": "success",
         "Data": {
-            "type": data.type,
+            "type": data.type_,
             "selected_classes": selected_classes_info
         }
     }

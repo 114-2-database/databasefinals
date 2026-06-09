@@ -84,7 +84,7 @@ _REMARK_TO_CATEGORY: dict[str, str] = {
     "英文": ENGLISH, "大學英文": ENGLISH,
     # 大學外文 — used to fulfil English requirement when student is exempt
     "foreign": FOREIGN_ALT, "foreign_alt": FOREIGN_ALT,
-    "外文": FOREIGN_ALT, "大學外文": FOREIGN_ALT,
+    "外文": FOREIGN_ALT, "大學外文": FOREIGN_ALT, "外文通識": FOREIGN_ALT,
     # 體育
     "pe": PE, "體育": PE,
 }
@@ -316,7 +316,7 @@ def evaluate(
         # ``humanities`` and ``foreign`` are stored as single integers on
         # the department row — treat them as the minimum required, with
         # no upper cap.
-        HUMANITIES: _status(credits[HUMANITIES], department.humanities, None),
+        HUMANITIES: _status(credits[HUMANITIES], department.humanities_min, department.humanities_max),
         SOCIAL: _status(credits[SOCIAL], department.social_min, department.social_max),
         SCIENCES: _status(credits[SCIENCES], department.sciences_min, department.sciences_max),
         COMPUTER: _status(credits[COMPUTER], department.computer_min, department.computer_max),

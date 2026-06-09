@@ -12,6 +12,14 @@
       <span class="divider">·</span>
       <span>雙輔：{{ student.double_minor }}</span>
       {% endif %}
+      {% if english_exempt %}
+      <span class="divider">·</span>
+      <span class="tag tag-green">英文免修資格</span>
+      {% endif %}
+      {% if computer_exempt %}
+      <span class="divider">·</span>
+      <span class="tag tag-green">資訊通識免修</span>
+      {% endif %}
     </div>
   </div>
   <a class="btn-ghost" href="/details">← 返回修課明細</a>
@@ -146,17 +154,22 @@
   </div>
 
   {# 資訊通識 #}
-  {% set i_ok = info_credits >= 2 %}
+  {% set i_ok = computer_exempt or info_credits >= 2 %}
   <div class="cat-card">
     <div class="cat-header">
       <div class="cat-name">資訊通識</div>
+      {% if computer_exempt %}
+      <span class="cat-range">本系免修（固定 0 學分）</span>
+      <span class="tag tag-green">免修</span>
+      {% else %}
       <span class="cat-range">應修 2–3 學分</span>
       {% if i_ok %}<span class="tag tag-green">達標</span>{% else %}<span class="tag tag-amber">未達標</span>{% endif %}
+      {% endif %}
     </div>
-    <div class="cat-credits">{{ info_credits }}<span class="cat-denom"> 學分</span></div>
-    {% set i_pct = [(info_credits / 3 * 100), 100] | min | int %}
+    <div class="cat-credits">{{ 0 if computer_exempt else info_credits }}<span class="cat-denom"> 學分</span></div>
+    {% set i_pct = 0 if computer_exempt else ([(info_credits / 3 * 100), 100] | min | int) %}
     <div class="cat-bar-bg"><div class="cat-bar" style="width:{{ i_pct }}%; background:#7b5ea7;"></div></div>
-    {% if info_credits > 3 %}<div class="cat-excess">超出 {{ info_credits - 3 }} 學分（不計入畢業學分）</div>{% endif %}
+    {% if not computer_exempt and info_credits > 3 %}<div class="cat-excess">超出 {{ info_credits - 3 }} 學分（不計入畢業學分）</div>{% endif %}
   </div>
 
   {# 書院通識 #}
@@ -186,15 +199,18 @@
     {% if chinese_credits > 6 %}<div class="cat-excess">超出 {{ chinese_credits - 6 }} 學分（不計入畢業學分）</div>{% endif %}
   </div>
 
-  {# 英文通識 #}
+  {# 外文通識 #}
   {% set en_ok = english_credits >= 6 %}
   <div class="cat-card">
     <div class="cat-header">
-      <div class="cat-name">英文通識</div>
+      <div class="cat-name">外文通識</div>
       <span class="cat-range">應修 6 學分</span>
       {% if en_ok %}<span class="tag tag-green">達標</span>{% else %}<span class="tag tag-amber">未達標</span>{% endif %}
     </div>
     <div class="cat-credits">{{ english_credits }}<span class="cat-denom"> 學分</span></div>
+    {% if english_exempt %}
+    <div class="cat-excess">已具英文免修資格，仍需由其他通識領域補足畢業學分。</div>
+    {% endif %}
     {% set en_pct = [(english_credits / 6 * 100), 100] | min | int %}
     <div class="cat-bar-bg"><div class="cat-bar" style="width:{{ en_pct }}%; background:#2563eb;"></div></div>
     {% if english_credits > 6 %}<div class="cat-excess">超出 {{ english_credits - 6 }} 學分（不計入畢業學分）</div>{% endif %}

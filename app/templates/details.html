@@ -1,8 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
 
+{# Override container width for this wide-table page #}
+<style>
+  .main-content .container { max-width: 1280px; }
+</style>
+
+{% set cat_names = {
+  "HUM":"人文通識","SOC":"社會通識","NAT":"自然通識","INFO":"資訊通識",
+  "COL":"書院通識","CHI":"中文通識","ENG":"外文通識","PE":"體育"
+} %}
+
 {# ── 學生資訊 ── #}
-<div class="student-card mb-4">
+<div class="student-card mb-3">
   <div class="student-avatar">{{ student.name[0] if student else '？' }}</div>
   <div class="student-info">
     <div class="student-name">{{ student.name }}</div>
@@ -11,6 +21,14 @@
       {% if student.double_minor %}
       <span class="divider">·</span>
       <span>雙輔：{{ student.double_minor }}</span>
+      {% endif %}
+      {% if student.english_exempt %}
+      <span class="divider">·</span>
+      <span class="tag tag-green">英文免修</span>
+      {% endif %}
+      {% if student.computer_exempt %}
+      <span class="divider">·</span>
+      <span class="tag tag-green">資訊免修</span>
       {% endif %}
     </div>
   </div>
@@ -22,117 +40,213 @@
     <div>
       <p class="page-eyebrow">Step 1 — 查看修課紀錄</p>
       <h1 class="page-title">課程明細</h1>
-      <p class="page-desc">若有跨領域課程，請先選擇要計入哪個領域，再按下計算</p>
+      <p class="page-desc">跨領域課程可點選 tag 選擇要計入的領域，再按下計算</p>
     </div>
   </div>
 </div>
 
-{# ── Tab 切換 ── #}
-<div class="tab-bar mb-3" id="tabBar">
-  {% set tabs = [
-    ("all",  "全部"), ("HUM",  "人文"), ("SOC",  "社會"),
-    ("NAT",  "自然"), ("INFO", "資訊"), ("COL",  "書院"),
-    ("CHI",  "中文"), ("ENG",  "英文"), ("PE",   "體育")
-  ] %}
-  {% for key, label in tabs %}
-  <button type="button" class="tab-btn {% if loop.first %}active{% endif %}"
-    onclick="switchTab('{{ key }}', this)">{{ label }}</button>
-  {% endfor %}
+{# ── 篩選列 ── #}
+<div class="filter-bar mb-3">
+  <div class="row g-2 align-items-end flex-wrap">
+    {# 文字搜尋 #}
+    <div class="col-auto">
+      <label class="fb-label">搜尋課程</label>
+      <input type="text" id="fltSearch" class="form-control-search"
+             placeholder="輸入課程名稱或教師…" oninput="applyFilters()">
+    </div>
+    {# 通識類別 #}
+    <div class="col-auto">
+      <label class="fb-label">通識類別</label>
+      <select id="fltCat" class="form-select form-select-sm" onchange="applyFilters()">
+        <option value="all">全部類別</option>
+        <option value="HUM">人文通識</option>
+        <option value="SOC">社會通識</option>
+        <option value="NAT">自然通識</option>
+        <option value="INFO">資訊通識</option>
+        <option value="COL">書院通識</option>
+        <option value="CHI">中文通識</option>
+        <option value="ENG">外文通識</option>
+        <option value="PE">體育</option>
+        <option value="OTHER">其他課程</option>
+      </select>
+    </div>
+    {# 課程類型 #}
+    <div class="col-auto">
+      <label class="fb-label">課程類型</label>
+      <select id="fltType" class="form-select form-select-sm" onchange="applyFilters()">
+        <option value="all">全部</option>
+        <option value="ge">通識課</option>
+        <option value="other">非通識</option>
+      </select>
+    </div>
+    {# 修課狀態 #}
+    <div class="col-auto">
+      <label class="fb-label">修課狀態</label>
+      <select id="fltPass" class="form-select form-select-sm" onchange="applyFilters()">
+        <option value="all">全部</option>
+        <option value="1">通過</option>
+        <option value="0">未通過</option>
+      </select>
+    </div>
+    {# 開課學期 #}
+    <div class="col-auto">
+      <label class="fb-label">開課學期</label>
+      <select id="fltSemester" class="form-select form-select-sm" onchange="applyFilters()">
+        <option value="all">全部學期</option>
+        {% set seen_sems = namespace(v=[]) %}
+        {% for row in items %}
+          {% if row.item.academic_year_semester not in seen_sems.v and row.item.academic_year_semester != '—' %}
+            {% set _ = seen_sems.v.append(row.item.academic_year_semester) %}
+            <option value="{{ row.item.academic_year_semester }}">{{ row.item.academic_year_semester }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    </div>
+    {# 排序 #}
+    <div class="col-auto">
+      <label class="fb-label">排序方式</label>
+      <select id="fltSort" class="form-select form-select-sm" onchange="applySort()">
+        <option value="default">預設（學期）</option>
+        <option value="score-desc">成績 高→低</option>
+        <option value="score-asc">成績 低→高</option>
+        <option value="credits-desc">學分 多→少</option>
+        <option value="credits-asc">學分 少→多</option>
+        <option value="title-asc">課名 A→Z</option>
+      </select>
+    </div>
+    {# 重設 #}
+    <div class="col-auto ms-auto">
+      <label class="fb-label" style="opacity:0">_</label>
+      <button class="btn-reset d-block" onclick="resetFilters()">重設篩選</button>
+    </div>
+  </div>
 </div>
 
-{# ── 課程列表（包在 form 內，POST 到 /results） ── #}
-{#
-   後端欄位說明：
-   row.item.id          — 課程唯一識別碼
-   row.item.sub_category — 主要領域代碼 (HUM/SOC/NAT/INFO/COL/CHI/ENG/PE)
-   row.item.alt_category — 第二領域代碼（跨領域課程才有，否則為 None/空字串）
-   row.item.is_core      — 是否為核心通識 (True/False)
-   row.item.credits      — 學分數
-   row.passed            — 是否已完成 (True/False)
+{# ── 結果筆數 ── #}
+<div class="result-count mb-2" id="resultCount"></div>
 
-   後端 POST /results 接收：
-   dual_<id> = 使用者選擇的領域代碼（只有跨領域課程才提交）
-#}
-
-{% set cat_names = {
-  "HUM":"人文通識","SOC":"社會通識","NAT":"自然通識","INFO":"資訊通識",
-  "COL":"書院通識","CHI":"中文通識","ENG":"英文通識","PE":"體育"
-} %}
-
+{# ── 課程表格（form 包裹，POST /results） ── #}
 <form method="post" action="/results" id="calcForm">
-  <div class="detail-card mb-3" id="courseTable">
-    <div class="detail-header-row">
-      <div class="dh-idx">#</div>
-      <div class="dh-name">課程名稱</div>
-      <div class="dh-cat">通識領域</div>
-      <div class="dh-core">類型</div>
-      <div class="dh-credit">學分</div>
-      <div class="dh-status">狀態</div>
-    </div>
+  <div class="table-card mb-3">
+    <table class="table courses-table">
+      <thead>
+        <tr>
+          <th class="sortable" data-col="title" onclick="toggleSort(this)">
+            課程名稱 <span class="sort-icon"></span>
+          </th>
+          <th>類別</th>
+          <th class="sortable text-center" data-col="credits" onclick="toggleSort(this)" style="width:60px;">
+            學分 <span class="sort-icon"></span>
+          </th>
+          <th class="sortable text-center" data-col="score" onclick="toggleSort(this)" style="width:72px;">
+            成績 <span class="sort-icon"></span>
+          </th>
+        </tr>
+      </thead>
+      <tbody id="courseBody">
+        {% for row in items %}
+        {% set it = row.item %}
+        {% set is_dual = it.alt_category is defined and it.alt_category %}
+        <tr class="course-row"
+            data-ge-cat="{{ it.sub_category }}"
+            data-alt-cat="{{ it.alt_category if is_dual else '' }}"
+            data-is-ge="{{ '1' if it.is_general_education else '0' }}"
+            data-passed="{{ '1' if row.passed else '0' }}"
+            data-title="{{ it.title }}"
+            data-credits="{{ it.credits }}"
+            data-score="{{ it.score_text }}"
+            data-semester="{{ it.academic_year_semester }}"
+            data-teacher="{{ it.teacher }}">
 
-    {% for row in items %}
-    {% set is_dual = row.item.alt_category is defined and row.item.alt_category %}
-    <div class="detail-row course-row"
-      data-primary-cat="{{ row.item.sub_category }}"
-      data-alt-cat="{{ row.item.alt_category if is_dual else '' }}"
-      data-effective-cat="{{ row.item.sub_category }}">
+          {# ── 課程名稱 ── #}
+          <td class="course-name-cell">
+            <div class="cn-main">
+              {% if it.is_general_education and it.is_core %}
+              <span class="core-dot" title="核心通識"></span>
+              {% endif %}
+              {{ it.title }}
+              {% if is_dual and it.is_general_education %}
+              <span class="dual-badge ms-1">跨領域</span>
+              {% endif %}
+              {% if not it.is_general_education %}
+              <span class="dual-badge ms-1" style="background:#f2f2f7;color:#8e8e93;">非通識</span>
+              {% endif %}
+            </div>
+            <div class="cn-sub">{{ it.teacher }}&ensp;·&ensp;{{ it.academic_year_semester }}</div>
+          </td>
 
-      <div class="detail-row-index">{{ loop.index }}</div>
+          {# ── 類別 ── #}
+          <td style="min-width:160px;">
+            {% if it.is_general_education %}
+              {% if is_dual %}
+                {# 跨領域：兩個可點選 tag，選中者有外框 #}
+                <div class="tags-wrap" id="tags_{{ it.id }}">
+                  <label class="cat-tag cat-tag-{{ it.sub_category }} cat-tag-sel is-selected"
+                         id="tag_{{ it.id }}_primary"
+                         title="點選此領域計入學分"
+                         onclick="selectDualTag({{ it.id }}, '{{ it.sub_category }}')">
+                    <input type="radio" name="dual_{{ it.id }}"
+                           value="{{ it.sub_category }}" checked>
+                    {{ cat_names.get(it.sub_category, it.sub_category) }}
+                  </label>
+                  <label class="cat-tag cat-tag-{{ it.alt_category }} cat-tag-sel"
+                         id="tag_{{ it.id }}_alt"
+                         title="點選此領域計入學分"
+                         onclick="selectDualTag({{ it.id }}, '{{ it.alt_category }}')">
+                    <input type="radio" name="dual_{{ it.id }}"
+                           value="{{ it.alt_category }}">
+                    {{ cat_names.get(it.alt_category, it.alt_category) }}
+                  </label>
+                </div>
+              {% else %}
+                {# 單一通識 #}
+                <div class="tags-wrap">
+                  <span class="cat-tag cat-tag-{{ it.sub_category }}">
+                    {{ cat_names.get(it.sub_category, it.sub_category) }}
+                  </span>
+                </div>
+              {% endif %}
+            {% else %}
+              {# 非通識：必修 / 選修 badge + remark #}
+              <div class="tags-wrap">
+                {% if it.course_type_label == "必修" %}
+                <span class="badge-required">必修</span>
+                {% else %}
+                <span class="badge-elective">選修</span>
+                {% endif %}
+                {% if it.category_display and it.category_display != '—' %}
+                <span class="cat-tag cat-tag-OTHER">{{ it.category_display }}</span>
+                {% endif %}
+              </div>
+            {% endif %}
+          </td>
 
-      <div class="detail-row-name">
-        {{ row.item.title }}
-        {% if is_dual %}<span class="dual-badge">跨領域</span>{% endif %}
-      </div>
+          {# ── 學分 ── #}
+          <td class="text-center" style="font-size:13px;font-weight:500;">
+            {{ it.credits }}
+          </td>
 
-      <div class="detail-row-cat">
-        {% if is_dual %}
-        <div class="dual-selector">
-          <label class="dual-opt">
-            <input type="radio"
-              name="dual_{{ row.item.id }}"
-              value="{{ row.item.sub_category }}"
-              checked
-              onchange="onDualChange(this)">
-            <span>{{ cat_names.get(row.item.sub_category, row.item.sub_category) }}</span>
-          </label>
-          <label class="dual-opt">
-            <input type="radio"
-              name="dual_{{ row.item.id }}"
-              value="{{ row.item.alt_category }}"
-              onchange="onDualChange(this)">
-            <span>{{ cat_names.get(row.item.alt_category, row.item.alt_category) }}</span>
-          </label>
-        </div>
-        {% else %}
-        {{ cat_names.get(row.item.sub_category, "—") }}
-        {% endif %}
-      </div>
+          {# ── 成績（合併狀態） ── #}
+          <td class="text-center">
+            {% if row.passed %}
+            <span class="score-pass">{{ it.score_text }}</span>
+            {% else %}
+            <span class="score-fail">{{ it.score_text }}</span>
+            {% endif %}
+          </td>
 
-      <div class="detail-row-core">
-        {% if row.item.is_core %}
-        <span class="core-badge">核心</span>
-        {% else %}
-        <span class="gen-badge">一般</span>
-        {% endif %}
-      </div>
+        </tr>
+        {% endfor %}
 
-      <div class="detail-row-credit">{{ row.item.credits }} 學分</div>
-
-      <div class="detail-row-status">
-        {% if row.passed %}
-        <span class="status-badge status-ok">✓ 完成</span>
-        {% else %}
-        <span class="status-badge status-ng">✗ 未完成</span>
-        {% endif %}
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-
-  {# 空狀態 #}
-  <div class="empty-state" id="emptyState" style="display:none;">
-    <div class="empty-icon">📭</div>
-    <p>此類別尚無課程資料</p>
+        {# 空狀態行 #}
+        <tr class="empty-row" id="emptyRow" style="display:none;">
+          <td colspan="4">
+            <div class="ei">📭</div>
+            此條件下無課程資料
+          </td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 
   {# ── 計算按鈕 ── #}
@@ -151,43 +265,168 @@
 </form>
 
 <script>
-/* ─── Tab 切換 ─────────────────────────────────── */
-let currentTab = 'all';
+/* ═══════════════════════════════════════════════════
+   雙領域 Tag 互動
+═══════════════════════════════════════════════════ */
+function selectDualTag(classId, chosenCat) {
+  const primaryTag = document.getElementById('tag_' + classId + '_primary');
+  const altTag     = document.getElementById('tag_' + classId + '_alt');
+  if (!primaryTag || !altTag) return;
 
-function switchTab(name, btn) {
-  currentTab = name;
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  filterCourses();
+  const primaryVal = primaryTag.querySelector('input[type="radio"]').value;
+  if (chosenCat === primaryVal) {
+    primaryTag.classList.add('is-selected');
+    altTag.classList.remove('is-selected');
+    primaryTag.querySelector('input').checked = true;
+  } else {
+    altTag.classList.add('is-selected');
+    primaryTag.classList.remove('is-selected');
+    altTag.querySelector('input').checked = true;
+  }
+  // Update row's data-ge-cat so the category filter works correctly
+  const row = primaryTag.closest('tr');
+  if (row) row.dataset.geCat = chosenCat;
 }
 
-function filterCourses() {
-  const rows = document.querySelectorAll('.course-row');
+/* ═══════════════════════════════════════════════════
+   篩選
+═══════════════════════════════════════════════════ */
+function applyFilters() {
+  const fCat      = document.getElementById('fltCat').value;
+  const fType     = document.getElementById('fltType').value;
+  const fPass     = document.getElementById('fltPass').value;
+  const fSemester = document.getElementById('fltSemester').value;
+  const fSearch   = document.getElementById('fltSearch').value.trim().toLowerCase();
+
+  const rows = document.querySelectorAll('#courseBody .course-row');
   let visible = 0;
+
   rows.forEach(row => {
-    const eff  = row.dataset.effectiveCat;
-    const show = currentTab === 'all' || eff === currentTab;
-    row.style.display = show ? '' : 'none';
+    const geCat   = row.dataset.geCat;
+    const altCat  = row.dataset.altCat;
+    const isGe    = row.dataset.isGe === '1';
+    const passed  = row.dataset.passed;
+    const semester = row.dataset.semester;
+    const title   = (row.dataset.title   || '').toLowerCase();
+    const teacher = (row.dataset.teacher || '').toLowerCase();
+
+    let show = true;
+
+    // Category filter: match primary OR alt category
+    if (fCat !== 'all') {
+      const matchPrimary = geCat === fCat;
+      const matchAlt     = altCat === fCat;
+      show = show && (matchPrimary || matchAlt);
+    }
+    // Type filter
+    if (fType !== 'all') {
+      if (fType === 'ge')    show = show && isGe;
+      if (fType === 'other') show = show && !isGe;
+    }
+    // Pass filter
+    if (fPass !== 'all') show = show && (passed === fPass);
+    // Semester filter
+    if (fSemester !== 'all') show = show && (semester === fSemester);
+    // Search filter
+    if (fSearch) show = show && (title.includes(fSearch) || teacher.includes(fSearch));
+
+    row.classList.toggle('hidden-row', !show);
     if (show) visible++;
   });
-  document.getElementById('emptyState').style.display = visible === 0 ? 'block' : 'none';
-  document.querySelectorAll('.course-row.detail-row-last')
-    .forEach(r => r.classList.remove('detail-row-last'));
-  const vis = [...rows].filter(r => r.style.display !== 'none');
-  if (vis.length) vis[vis.length - 1].classList.add('detail-row-last');
+
+  document.getElementById('emptyRow').style.display = visible === 0 ? '' : 'none';
+  document.getElementById('resultCount').innerHTML =
+    '共顯示 <strong>' + visible + '</strong> / ' + rows.length + ' 筆課程';
 }
 
-/* ─── 跨領域課程選擇 ────────────────────────────── */
-function onDualChange(radio) {
-  const row = radio.closest('.course-row');
-  row.dataset.effectiveCat = radio.value;
-  if (currentTab !== 'all') filterCourses();
+/* ═══════════════════════════════════════════════════
+   排序（header 點擊 + 下拉選單）
+═══════════════════════════════════════════════════ */
+let _sortCol = 'semester';
+let _sortDir = 'asc';
+
+function toggleSort(th) {
+  const col = th.dataset.col;
+  if (_sortCol === col) {
+    _sortDir = _sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _sortCol = col;
+    _sortDir = 'asc';
+  }
+  updateSortHeaders();
+  sortTable();
 }
 
-/* 初始化最後一列邊框 */
-(function() {
-  const rows = document.querySelectorAll('.course-row');
-  if (rows.length) rows[rows.length - 1].classList.add('detail-row-last');
+function applySort() {
+  const val = document.getElementById('fltSort').value;
+  const map = {
+    'default':      ['semester', 'asc'],
+    'score-desc':   ['score',    'desc'],
+    'score-asc':    ['score',    'asc'],
+    'credits-desc': ['credits',  'desc'],
+    'credits-asc':  ['credits',  'asc'],
+    'title-asc':    ['title',    'asc'],
+  };
+  [_sortCol, _sortDir] = map[val] || ['semester', 'asc'];
+  updateSortHeaders();
+  sortTable();
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('.courses-table thead th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.col === _sortCol) {
+      th.classList.add(_sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+function sortTable() {
+  const tbody = document.getElementById('courseBody');
+  const rows  = [...tbody.querySelectorAll('.course-row')];
+
+  rows.sort((a, b) => {
+    let va, vb;
+    if (_sortCol === 'score') {
+      va = parseFloat(a.dataset.score) || -1;
+      vb = parseFloat(b.dataset.score) || -1;
+    } else if (_sortCol === 'credits') {
+      va = parseInt(a.dataset.credits)  || 0;
+      vb = parseInt(b.dataset.credits)  || 0;
+    } else if (_sortCol === 'title') {
+      va = (a.dataset.title || '').toLowerCase();
+      vb = (b.dataset.title || '').toLowerCase();
+    } else {
+      // default: semester
+      va = a.dataset.semester || '';
+      vb = b.dataset.semester || '';
+    }
+    if (va < vb) return _sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return _sortDir === 'asc' ?  1 : -1;
+    return 0;
+  });
+
+  const emptyRow = document.getElementById('emptyRow');
+  rows.forEach(r => tbody.insertBefore(r, emptyRow));
+}
+
+function resetFilters() {
+  document.getElementById('fltSearch').value   = '';
+  document.getElementById('fltCat').value      = 'all';
+  document.getElementById('fltType').value     = 'all';
+  document.getElementById('fltPass').value     = 'all';
+  document.getElementById('fltSemester').value = 'all';
+  document.getElementById('fltSort').value     = 'default';
+  _sortCol = 'semester'; _sortDir = 'asc';
+  updateSortHeaders();
+  applyFilters();
+  sortTable();
+}
+
+/* ── 初始化 ── */
+(function init() {
+  sortTable();
+  applyFilters();
 })();
 </script>
 

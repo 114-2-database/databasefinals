@@ -516,3 +516,138 @@ body {
 }
 .empty-icon { font-size: 2.5rem; margin-bottom: .75rem; }
 .empty-state p { font-size: 13px; margin: 0; }
+
+/* ════════════════════════════════════════
+   Details Page — Wide Layout
+   ════════════════════════════════════════ */
+.details-layout .main-content .container,
+.details-layout.main-content .container { max-width: 1280px; }
+
+/* ── GE Category Tags ── */
+.cat-tag {
+  display: inline-flex; align-items: center;
+  font-size: 10px; font-weight: 600;
+  padding: 2px 9px; border-radius: 99px;
+  white-space: nowrap; line-height: 1.7;
+  transition: box-shadow .12s;
+}
+.cat-tag-HUM  { background: #fdf0e6; color: #a05a2c; }
+.cat-tag-SOC  { background: #e8f0fa; color: #1d4a8f; }
+.cat-tag-NAT  { background: #e8f5e8; color: #1f5e1f; }
+.cat-tag-INFO { background: #f0ebfa; color: #5b3fa0; }
+.cat-tag-COL  { background: #f2f2f7; color: #636366; }
+.cat-tag-CHI  { background: #fff7e6; color: #9a5000; }
+.cat-tag-ENG  { background: #e8f0ff; color: #1a40cc; }
+.cat-tag-PE   { background: #e8f4f3; color: #0a6a62; }
+.cat-tag-OTHER { background: #f2f2f7; color: #8e8e93; }
+
+/* Dual-select: tag acts as radio label */
+.cat-tag-sel {
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+}
+.cat-tag-sel.is-selected { outline-color: currentColor; }
+.cat-tag-sel input[type="radio"] { display: none; }
+
+/* ── Required / Elective badges ── */
+.badge-required { font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 99px; background: #fee2e2; color: #b91c1c; white-space: nowrap; }
+.badge-elective  { font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 99px; background: #eff6ff; color: #1d4ed8; white-space: nowrap; }
+
+/* ── Core dot (●) beside course name ── */
+.core-dot {
+  display: inline-block; width: 6px; height: 6px;
+  border-radius: 50%; background: #c05600;
+  margin-right: 4px; vertical-align: 2px; flex-shrink: 0;
+}
+
+/* ── Score cells ── */
+.score-pass { color: #1a7a41; font-weight: 700; }
+.score-fail { color: #b91c1c; font-weight: 700; }
+.score-na   { color: var(--text-mute); font-size: 12px; }
+
+/* ── Filter Bar ── */
+.filter-bar {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 14px 18px;
+}
+.filter-bar .fb-label {
+  font-size: 10px; font-weight: 600;
+  color: var(--text-sub); text-transform: uppercase;
+  letter-spacing: .04em; display: block; margin-bottom: 4px;
+}
+.filter-bar .form-select {
+  font-size: 12px; border-radius: 9px;
+  border-color: rgba(0,0,0,.12); color: var(--text);
+  min-width: 110px;
+}
+.filter-bar .form-control-search {
+  font-size: 12px; border-radius: 9px;
+  border: 1px solid rgba(0,0,0,.12); padding: 5px 10px;
+  outline: none; color: var(--text); min-width: 160px;
+  transition: box-shadow .15s;
+}
+.filter-bar .form-control-search:focus {
+  box-shadow: 0 0 0 3px rgba(25,52,143,.15);
+}
+.filter-bar .btn-reset {
+  font-size: 12px; padding: 5px 14px;
+  border-radius: 9px; border: 1px solid rgba(0,0,0,.12);
+  background: none; color: var(--text-sub); cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+  transition: background .12s;
+}
+.filter-bar .btn-reset:hover { background: var(--bg); }
+
+/* ── Courses Table Card ── */
+.table-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.courses-table { margin-bottom: 0; }
+.courses-table thead th {
+  background: var(--surface2);
+  font-size: 10px; font-weight: 600; color: var(--text-sub);
+  letter-spacing: .05em; text-transform: uppercase;
+  border-bottom: 1px solid rgba(0,0,0,.08);
+  padding: 10px 14px; white-space: nowrap;
+  vertical-align: middle;
+}
+.courses-table thead th.sortable { cursor: pointer; }
+.courses-table thead th.sortable:hover { color: var(--text); }
+.courses-table thead th .sort-icon { margin-left: 4px; font-size: 9px; opacity: .4; }
+.courses-table thead th .sort-icon::after { content: "⇅"; }
+.courses-table thead th.sort-asc  .sort-icon { opacity: 1; color: var(--blue); }
+.courses-table thead th.sort-asc  .sort-icon::after { content: "▲"; }
+.courses-table thead th.sort-desc .sort-icon { opacity: 1; color: var(--blue); }
+.courses-table thead th.sort-desc .sort-icon::after { content: "▼"; }
+.courses-table tbody td {
+  padding: 10px 14px; vertical-align: middle;
+  border-bottom: 0.5px solid rgba(0,0,0,.05);
+  font-size: 13px;
+}
+.courses-table tbody tr:last-child td { border-bottom: none; }
+.courses-table tbody tr.hidden-row { display: none; }
+
+/* Course name cell */
+.cn-main { font-weight: 500; color: var(--text); line-height: 1.4; }
+.cn-sub  { font-size: 11px; color: var(--text-sub); margin-top: 2px; }
+
+/* Tags container */
+.tags-wrap { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+
+/* Empty row */
+.empty-row td { text-align: center; padding: 3rem; color: var(--text-mute); }
+.empty-row .ei { font-size: 2rem; margin-bottom: .4rem; }
+
+/* Result count chip */
+.result-count {
+  font-size: 11px; color: var(--text-sub);
+  display: inline-block;
+  margin-bottom: 8px;
+}
+.result-count strong { color: var(--text); }
