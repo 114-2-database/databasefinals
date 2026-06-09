@@ -1,56 +1,66 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="page-header mb-4">
-  <div class="page-header-inner">
-    <div>
-      <p class="page-eyebrow">修課明細</p>
-      <h1 class="page-title">課程達標清單</h1>
-      <p class="page-desc">通識與體育課程的逐項達標狀況</p>
+{# ── 學生資訊 ── #}
+<div class="student-card mb-4">
+  <div class="student-avatar">{{ student.name[0] if student else '？' }}</div>
+  <div class="student-info">
+    <div class="student-name">{{ student.name }}</div>
+    <div class="student-meta">
+      <span>{{ student.department }}</span>
+      {% if student.double_minor %}
+      <span class="divider">·</span>
+      <span>雙輔：{{ student.double_minor }}</span>
+      {% endif %}
     </div>
-    <a class="btn-ghost" href="/dashboard">← 回總覽</a>
   </div>
 </div>
 
-{# Tab 切換 #}
-<div class="tab-bar mb-4">
-  {% set cats = [
-    ("all",    "全部"),
-    ("HUM",    "人文通識"),
-    ("SOC",    "社會通識"),
-    ("NAT",    "自然通識"),
-    ("INFO",   "資訊通識"),
-    ("COL",    "書院通識"),
-    ("CHI",    "中文通識"),
-    ("ENG",    "英文通識"),
-    ("PE",     "體育")
+{# ── 頁面標題 ── #}
+<div class="page-header mb-3">
+  <div class="page-header-inner">
+    <div>
+      <p class="page-eyebrow">Step 1 — 查看修課紀錄</p>
+      <h1 class="page-title">課程明細</h1>
+      <p class="page-desc">若有跨領域課程，請先選擇要計入哪個領域，再按下計算</p>
+    </div>
+  </div>
+</div>
+
+{# ── Tab 切換 ── #}
+<div class="tab-bar mb-3" id="tabBar">
+  {% set tabs = [
+    ("all",  "全部"), ("HUM",  "人文"), ("SOC",  "社會"),
+    ("NAT",  "自然"), ("INFO", "資訊"), ("COL",  "書院"),
+    ("CHI",  "中文"), ("ENG",  "英文"), ("PE",   "體育")
   ] %}
-  {% for key, label in cats %}
-  <button class="tab-btn {% if loop.first %}active{% endif %}"
+  {% for key, label in tabs %}
+  <button type="button" class="tab-btn {% if loop.first %}active{% endif %}"
     onclick="switchTab('{{ key }}', this)">{{ label }}</button>
   {% endfor %}
 </div>
 
-{# 課程列表 — 依 sub_category 篩選 #}
-{% for key, label in [("all","全部"),("HUM","人文通識"),("SOC","社會通識"),("NAT","自然通識"),("INFO","資訊通識"),("COL","書院通識"),("CHI","中文通識"),("ENG","英文通識"),("PE","體育")] %}
-<div id="panel-{{ key }}" class="tab-panel" style="{{ 'display:block' if loop.first else 'display:none' }}">
+{# ── 課程列表（包在 form 內，POST 到 /results） ── #}
+{#
+   後端欄位說明：
+   row.item.id          — 課程唯一識別碼
+   row.item.sub_category — 主要領域代碼 (HUM/SOC/NAT/INFO/COL/CHI/ENG/PE)
+   row.item.alt_category — 第二領域代碼（跨領域課程才有，否則為 None/空字串）
+   row.item.is_core      — 是否為核心通識 (True/False)
+   row.item.credits      — 學分數
+   row.passed            — 是否已完成 (True/False)
 
-  {% if key == "all" %}
-    {% set panel_items = items %}
-  {% else %}
-    {% set panel_items = items | selectattr("item.sub_category", "equalto", key) | list %}
-  {% endif %}
+   後端 POST /results 接收：
+   dual_<id> = 使用者選擇的領域代碼（只有跨領域課程才提交）
+#}
 
-  {% set done = panel_items | selectattr("passed") | list | length %}
-  {% set total = panel_items | length %}
+{% set cat_names = {
+  "HUM":"人文通識","SOC":"社會通識","NAT":"自然通識","INFO":"資訊通識",
+  "COL":"書院通識","CHI":"中文通識","ENG":"英文通識","PE":"體育"
+} %}
 
-  {% if panel_items %}
-  <div class="detail-summary mb-3">
-    共 <b>{{ total }}</b> 門課 ·
-    已達標 <b class="text-ok">{{ done }}</b> 門 ·
-    未完成 <b class="text-ng">{{ total - done }}</b> 門
-  </div>
-  <div class="detail-card">
+<form method="post" action="/results" id="calcForm">
+  <div class="detail-card mb-3" id="courseTable">
     <div class="detail-header-row">
       <div class="dh-idx">#</div>
       <div class="dh-name">課程名稱</div>
@@ -59,21 +69,45 @@
       <div class="dh-credit">學分</div>
       <div class="dh-status">狀態</div>
     </div>
-    {% for row in panel_items %}
-    <div class="detail-row {% if loop.last %}detail-row-last{% endif %}">
+
+    {% for row in items %}
+    {% set is_dual = row.item.alt_category is defined and row.item.alt_category %}
+    <div class="detail-row course-row"
+      data-primary-cat="{{ row.item.sub_category }}"
+      data-alt-cat="{{ row.item.alt_category if is_dual else '' }}"
+      data-effective-cat="{{ row.item.sub_category }}">
+
       <div class="detail-row-index">{{ loop.index }}</div>
-      <div class="detail-row-name">{{ row.item.title }}</div>
-      <div class="detail-row-cat">
-        {% if row.item.sub_category == "HUM" %}人文通識
-        {% elif row.item.sub_category == "SOC" %}社會通識
-        {% elif row.item.sub_category == "NAT" %}自然通識
-        {% elif row.item.sub_category == "INFO" %}資訊通識
-        {% elif row.item.sub_category == "COL" %}書院通識
-        {% elif row.item.sub_category == "CHI" %}中文通識
-        {% elif row.item.sub_category == "ENG" %}英文通識
-        {% elif row.item.sub_category == "PE" %}體育
-        {% else %}—{% endif %}
+
+      <div class="detail-row-name">
+        {{ row.item.title }}
+        {% if is_dual %}<span class="dual-badge">跨領域</span>{% endif %}
       </div>
+
+      <div class="detail-row-cat">
+        {% if is_dual %}
+        <div class="dual-selector">
+          <label class="dual-opt">
+            <input type="radio"
+              name="dual_{{ row.item.id }}"
+              value="{{ row.item.sub_category }}"
+              checked
+              onchange="onDualChange(this)">
+            <span>{{ cat_names.get(row.item.sub_category, row.item.sub_category) }}</span>
+          </label>
+          <label class="dual-opt">
+            <input type="radio"
+              name="dual_{{ row.item.id }}"
+              value="{{ row.item.alt_category }}"
+              onchange="onDualChange(this)">
+            <span>{{ cat_names.get(row.item.alt_category, row.item.alt_category) }}</span>
+          </label>
+        </div>
+        {% else %}
+        {{ cat_names.get(row.item.sub_category, "—") }}
+        {% endif %}
+      </div>
+
       <div class="detail-row-core">
         {% if row.item.is_core %}
         <span class="core-badge">核心</span>
@@ -81,7 +115,9 @@
         <span class="gen-badge">一般</span>
         {% endif %}
       </div>
+
       <div class="detail-row-credit">{{ row.item.credits }} 學分</div>
+
       <div class="detail-row-status">
         {% if row.passed %}
         <span class="status-badge status-ok">✓ 完成</span>
@@ -92,22 +128,67 @@
     </div>
     {% endfor %}
   </div>
-  {% else %}
-  <div class="empty-state">
+
+  {# 空狀態 #}
+  <div class="empty-state" id="emptyState" style="display:none;">
     <div class="empty-icon">📭</div>
     <p>此類別尚無課程資料</p>
   </div>
-  {% endif %}
-</div>
-{% endfor %}
+
+  {# ── 計算按鈕 ── #}
+  <div class="calc-action mb-5">
+    <p class="calc-hint">跨領域課程選擇完成後，點擊計算</p>
+    <button type="submit" class="btn-calc">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="margin-right:6px;vertical-align:-2px">
+        <rect x="1" y="1" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="9" y="1" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="1" y="9" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      計算通識學分
+    </button>
+  </div>
+</form>
 
 <script>
+/* ─── Tab 切換 ─────────────────────────────────── */
+let currentTab = 'all';
+
 function switchTab(name, btn) {
-  document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+  currentTab = name;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('panel-' + name).style.display = 'block';
   btn.classList.add('active');
+  filterCourses();
 }
+
+function filterCourses() {
+  const rows = document.querySelectorAll('.course-row');
+  let visible = 0;
+  rows.forEach(row => {
+    const eff  = row.dataset.effectiveCat;
+    const show = currentTab === 'all' || eff === currentTab;
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  document.getElementById('emptyState').style.display = visible === 0 ? 'block' : 'none';
+  document.querySelectorAll('.course-row.detail-row-last')
+    .forEach(r => r.classList.remove('detail-row-last'));
+  const vis = [...rows].filter(r => r.style.display !== 'none');
+  if (vis.length) vis[vis.length - 1].classList.add('detail-row-last');
+}
+
+/* ─── 跨領域課程選擇 ────────────────────────────── */
+function onDualChange(radio) {
+  const row = radio.closest('.course-row');
+  row.dataset.effectiveCat = radio.value;
+  if (currentTab !== 'all') filterCourses();
+}
+
+/* 初始化最後一列邊框 */
+(function() {
+  const rows = document.querySelectorAll('.course-row');
+  if (rows.length) rows[rows.length - 1].classList.add('detail-row-last');
+})();
 </script>
 
 {% endblock %}
