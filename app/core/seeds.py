@@ -1,241 +1,185 @@
-import hashlib
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models import Class, Department, SelectedClass, Student
+from data.department_seed import SEED_DEPARTMENTS
+from data.selected_class_seed import seed_selected_classes
+from data.student_seed import SEED_STUDENTS, export_seed_credentials_to_csv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+COURSE_DATA_DIR = PROJECT_ROOT / "data" / "course"
+DEPARTMENT_CLASS_DATA_DIR = PROJECT_ROOT / "data" / "department_class"
+COURSE_SEED_FILENAMES: tuple[str, ...] = (
+    "1111.py",
+    "1112.py",
+    "1121.py",
+    "1122.py",
+    "1131.py",
+    "1132.py",
+    "1141.py",
+    "1142.py",
+    "foreign_language.py",
+    "pe.py",
+)
+DEPARTMENT_CLASS_SEED_FILENAMES: tuple[str, ...] = (
+    "business.py",
+    "chinese.py",
+    "communication.py",
+    "computer.py",
+    "education.py",
+    "foreign.py",
+    "international.py",
+    "law.py",
+    "science.py",
+    "social.py",
+)
 
 
-def hash_password(raw: str) -> str:
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def _load_course_rows_from_file(file_path: Path) -> list[dict[str, Any]]:
+    content: str = file_path.read_text(encoding="utf-8")
+    match = re.search(r"SEED_CLASSES\s*:[^=]*=\s*(\[)", content)
+    if match is None:
+        return []
+
+    decoder = json.JSONDecoder()
+    try:
+        raw_rows, _ = decoder.raw_decode(content[match.start(1) :])
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(raw_rows, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in raw_rows:
+        if isinstance(item, dict):
+            rows.append(item)
+    return rows
 
 
-def get_or_create_department(db, name: str = "General Studies") -> Department:
-    department = db.query(Department).filter(Department.name == name).first()
-    if department:
-        return department
+def _load_all_course_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for file_name in COURSE_SEED_FILENAMES:
+        path = COURSE_DATA_DIR / file_name
+        if not path.exists():
+            continue
+        rows.extend(_load_course_rows_from_file(path))
+    for file_name in DEPARTMENT_CLASS_SEED_FILENAMES:
+        path = DEPARTMENT_CLASS_DATA_DIR / file_name
+        if not path.exists():
+            continue
+        rows.extend(_load_course_rows_from_file(path))
+    return rows
 
-    department = Department(
-        name=name,
-        humanities=0,
-        social_min=0,
-        social_max=0,
-        sciences_min=0,
-        sciences_max=0,
-        computer_min=0,
-        computer_max=0,
-        residential_min=0,
-        residential_max=0,
-        chinese_min=0,
-        chinese_max=0,
-        pe=0,
-        foreign=0,
+
+def _seed_departments_once(session: Session) -> tuple[int, int]:
+    inserted: int = 0
+    skipped: int = 0
+    for row in SEED_DEPARTMENTS:
+        department_id = int(row["id"])
+        existing = session.get(Department, department_id)
+        if existing is not None:
+            skipped += 1
+            continue
+        session.add(Department(**row))
+        inserted += 1
+    session.commit()
+    return inserted, skipped
+
+
+def _seed_students_once(session: Session) -> tuple[int, int]:
+    inserted: int = 0
+    skipped: int = 0
+    for row in SEED_STUDENTS:
+        student_id = int(row["id"])
+        if session.get(Student, student_id) is not None:
+            skipped += 1
+            continue
+        main_department_id = int(row["main_department_id"])
+        if session.get(Department, main_department_id) is None:
+            skipped += 1
+            continue
+        session.add(Student(**row))
+        inserted += 1
+    session.commit()
+    return inserted, skipped
+
+
+def _seed_courses_once(session: Session) -> tuple[int, int]:
+    inserted: int = 0
+    skipped: int = 0
+    seen_ids: set[int] = set()
+    for raw_row in _load_all_course_rows():
+        class_id = int(raw_row["id"])
+        if class_id in seen_ids:
+            skipped += 1
+            continue
+        seen_ids.add(class_id)
+
+        if session.get(Class, class_id) is not None:
+            skipped += 1
+            continue
+        row: dict[str, Any] = {
+            "id": class_id,
+            "name": str(raw_row["name"]),
+            "credits": int(raw_row["credits"]),
+            "requiredOrElectiveCourse": str(raw_row["requiredOrElectiveCourse"]),
+            "remark": str(raw_row.get("remark", "")),
+            "teacher": str(raw_row["teacher"]),
+            "core": bool(raw_row["core"]),
+            "academicYearSemester": str(raw_row["academicYearSemester"]),
+        }
+        session.add(Class(**row))
+        inserted += 1
+    session.commit()
+    return inserted, skipped
+
+
+def _selected_class_pk_set(session: Session) -> set[tuple[int, int]]:
+    rows: list[tuple[int, int]] = list(
+        session.query(SelectedClass.classid, SelectedClass.studentid).all()
     )
-    db.add(department)
-    db.commit()
-    db.refresh(department)
-    return department
+    return {(int(class_id), int(student_id)) for class_id, student_id in rows}
 
 
-def get_or_create_student(
-    db,
-    email: str,
-    password: str,
-    name: str,
-    sex: str,
-    department: Department,
-) -> tuple[Student, bool]:
-    student = db.query(Student).filter(Student.email == email).first()
-    if student:
-        return student, False
-
-    student = Student(
-        name=name,
-        email=email,
-        hashed_password=hash_password(password),
-        sex=sex,
-        main_department_id=department.id,
+def _seed_selected_classes_once(session: Session) -> tuple[int, int]:
+    before_pk_set: set[tuple[int, int]] = _selected_class_pk_set(session)
+    generated_rows: int = seed_selected_classes(
+        session=session,
+        student_model=Student,
+        class_model=Class,
+        selected_class_model=SelectedClass,
     )
-    db.add(student)
-    db.commit()
-    db.refresh(student)
-    return student, True
-
-
-def get_or_create_class(
-    db,
-    name: str,
-    credits: int,
-    required_or_elective: str,
-    teacher: str,
-    core: bool,
-    semester: str,
-    remark: str = "",
-) -> Class:
-    class_ = (
-        db.query(Class)
-        .filter(Class.name == name, Class.academicYearSemester == semester)
-        .first()
-    )
-    if class_:
-        return class_
-
-    class_ = Class(
-        name=name,
-        credits=credits,
-        requiredOrElectiveCourse=required_or_elective,
-        remark=remark,
-        teacher=teacher,
-        core=core,
-        academicYearSemester=semester,
-    )
-    db.add(class_)
-    db.commit()
-    db.refresh(class_)
-    return class_
-
-
-def get_or_create_selected_class(
-    db,
-    student_id: int,
-    class_id: int,
-    ispassed: bool,
-    score: float,
-) -> SelectedClass:
-    selected = (
-        db.query(SelectedClass)
-        .filter(
-            SelectedClass.studentid == student_id,
-            SelectedClass.classid == class_id,
-        )
-        .first()
-    )
-    if selected:
-        return selected
-
-    selected = SelectedClass(
-        classid=class_id,
-        studentid=student_id,
-        ispassed=ispassed,
-        score=score,
-    )
-    db.add(selected)
-    db.commit()
-    db.refresh(selected)
-    return selected
-
-
-def clear_tables(db) -> None:
-    db.query(SelectedClass).delete(synchronize_session=False)
-    db.query(Class).delete(synchronize_session=False)
-    db.query(Student).delete(synchronize_session=False)
-    db.query(Department).delete(synchronize_session=False)
-    db.commit()
+    after_pk_set: set[tuple[int, int]] = _selected_class_pk_set(session)
+    inserted: int = max(len(after_pk_set) - len(before_pk_set), 0)
+    skipped: int = max(generated_rows - inserted, 0)
+    return inserted, skipped
 
 
 def seed() -> None:
-    db = SessionLocal()
+    session = SessionLocal()
     try:
-        clear_tables(db)
-        department = get_or_create_department(db)
-        student, created = get_or_create_student(
-            db,
-            email="demo@nccu.edu",
-            password="demo1234",
-            name="Demo Student",
-            sex="M",
-            department=department,
+        steps: list[tuple[str, tuple[int, int]]] = []
+        steps.append(("department_seed#1", _seed_departments_once(session)))
+        steps.append(("department_seed#2", _seed_departments_once(session)))
+        steps.append(("course", _seed_courses_once(session)))
+        steps.append(("student_seed", _seed_students_once(session)))
+        credential_csv_path: str = export_seed_credentials_to_csv(
+            output_path=str(PROJECT_ROOT / "data" / "student_seed_credentials.csv")
         )
-        status = "created" if created else "exists"
-        print(f"Seed student {status}: {student.email}")
+        steps.append(("selected_class_seed", _seed_selected_classes_once(session)))
 
-        classes = [
-            {
-                "name": "General Education: Humanities",
-                "credits": 2,
-                "required_or_elective": "GE",
-                "teacher": "Prof. Lin",
-                "core": True,
-                "semester": "2023-1",
-                "remark": "HUM",
-                "ispassed": True,
-                "score": 86.0,
-            },
-            {
-                "name": "General Education: Social",
-                "credits": 2,
-                "required_or_elective": "GE",
-                "teacher": "Prof. Chen",
-                "core": True,
-                "semester": "2023-2",
-                "remark": "SOC",
-                "ispassed": True,
-                "score": 90.0,
-            },
-            {
-                "name": "General Education: Natural",
-                "credits": 2,
-                "required_or_elective": "GE",
-                "teacher": "Prof. Wang",
-                "core": False,
-                "semester": "2024-1",
-                "remark": "NAT",
-                "ispassed": False,
-                "score": 0.0,
-            },
-            {
-                "name": "Information Literacy",
-                "credits": 2,
-                "required_or_elective": "GE",
-                "teacher": "Prof. Wu",
-                "core": False,
-                "semester": "2024-1",
-                "remark": "INFO",
-                "ispassed": True,
-                "score": 88.0,
-            },
-            {
-                "name": "English for Academic Purposes",
-                "credits": 3,
-                "required_or_elective": "GE",
-                "teacher": "Prof. Huang",
-                "core": False,
-                "semester": "2024-2",
-                "remark": "ENG",
-                "ispassed": True,
-                "score": 84.0,
-            },
-            {
-                "name": "Physical Education: Fitness",
-                "credits": 1,
-                "required_or_elective": "PE",
-                "teacher": "Coach Lee",
-                "core": False,
-                "semester": "2023-1",
-                "remark": "PE",
-                "ispassed": True,
-                "score": 92.0,
-            },
-        ]
-
-        for entry in classes:
-            class_ = get_or_create_class(
-                db,
-                name=entry["name"],
-                credits=entry["credits"],
-                required_or_elective=entry["required_or_elective"],
-                teacher=entry["teacher"],
-                core=entry["core"],
-                semester=entry["semester"],
-                remark=entry["remark"],
-            )
-            get_or_create_selected_class(
-                db,
-                student_id=student.id,
-                class_id=class_.id,
-                ispassed=entry["ispassed"],
-                score=entry["score"],
-            )
+        for label, (inserted, skipped) in steps:
+            print(f"[{label}] INSERTED={inserted} SKIPPED={skipped}")
+        print(f"[student_seed_credentials] EXPORTED={credential_csv_path}")
     finally:
-        db.close()
+        session.close()
 
 
 if __name__ == "__main__":
