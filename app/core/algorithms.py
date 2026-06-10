@@ -24,7 +24,11 @@ NOTE/TODO:
     - 需要 ``SelectedClass.chosen_category: str | None`` 欄位存在於 model 中
       (在該欄位加入之前，所有多類別課程將自動採用第一個列出的類別)
     
-    - 沒有 min & max 版本的通識種類都暫時被當 min (如: humanities 和 foreign)
+    - 英外文課程的 remark 都是「外文通識」，改用「課名」區分大學英文 / 大學外文 / 選修英文
+      (含「大學英文」→英文；含「大學外文」或「選修英文」→外文)
+
+    - 英文免修者需擇一補修：①兩堂不同的選修英文共 6 學分；②同語種大學外文（一）＋（二）。
+      兩案皆未達成則不通過，但已修學分仍計入 english（例如只修一堂選修英文計 3 學分）
 
     - ER-Diagram 裡面用 collegeEnglishExemption 來表示大學英文免修，但在 model 裡面用 eng_passed 來表示，所以這邊暫時用 eng_passed
 """
@@ -32,7 +36,7 @@ NOTE/TODO:
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Iterable
 
 from sqlalchemy.orm import Session, joinedload
@@ -53,10 +57,8 @@ FOREIGN_ALT = "foreign_alt"  # 大學外文 — counted only if eng_passed
 PE = "pe"
 
 
-# Map of normalized remark text → canonical category. Lookups are
-# case-insensitive after stripping whitespace, so each surface form only
-# needs to appear once. Includes the canonical keys themselves so a
-# ``chosen_category`` value of ``"social"`` resolves just like ``"社會通"``.
+# remark 文字 → 標準類別代號的對照表。比對前會去除空白並轉小寫，因此同一寫法只需列一次。
+# 也收錄類別代號本身（如 "social"），讓 ``chosen_category`` 填 "social" 時能與「社會通」一致解析。
 _REMARK_TO_CATEGORY: dict[str, str] = {
     # 人文通識
     "hum": HUMANITIES, "humanities": HUMANITIES,
@@ -67,9 +69,8 @@ _REMARK_TO_CATEGORY: dict[str, str] = {
     # 自然通識
     "nat": SCIENCES, "sciences": SCIENCES, "natural": SCIENCES,
     "自然": SCIENCES, "自然通": SCIENCES, "自然通識": SCIENCES,
-    # 資訊通識 — covers both 純資訊 and 跨領域 listings. The 跨領域 vs
-    # 非跨領域 distinction is now derived from how many categories the
-    # remark lists, so a dedicated COMPUTER_CROSS key is no longer needed.
+    # 資訊通識 — 同時涵蓋純資訊與跨領域寫法；跨領域與否改由 remark 列出幾個類別來判斷，
+    # 不再需要獨立的 COMPUTER_CROSS 代號。
     "info": COMPUTER, "computer": COMPUTER,
     "資訊": COMPUTER, "資訊通": COMPUTER, "資訊通識": COMPUTER,
     "跨領域資訊": COMPUTER, "跨領域資訊通": COMPUTER, "跨領域資訊通識": COMPUTER,
@@ -90,8 +91,15 @@ _REMARK_TO_CATEGORY: dict[str, str] = {
 }
 
 
-# Accept Chinese 、, Chinese ，, ASCII , or whitespace runs as separators.
-_REMARK_SPLIT_RE = re.compile(r"[、，,/]+|\s{2,}")
+# remark 內分隔符：中文「、」「，」、半形「,」「/」、半形/全形括號，以及多個空白。
+# 把括號也視為分隔符，是為了支援「跨領域(人文、社會)」「跨領域（人文、社會）」這類寫法
+# ——拆出 "跨領域"、"人文"、"社會"，其中 "跨領域" 無法對應類別會被自動忽略，
+# 只留下實際的領域類別（全形「（）」與半形「()」皆可）。
+_REMARK_SPLIT_RE = re.compile(r"[、，,/（）()]+|\s{2,}")
+
+# 比對大學外文課程名稱，抓出學期和語種，例如 "大學外文（一）：日文" → ("一", "日文")
+# 全形「（）」「：」與半形「()」「:」皆可，括號內外允許空白。
+_FOREIGN_LANG_RE = re.compile(r"大學外文\s*[（(]\s*([一二])\s*[）)]\s*[：:]\s*(.+)")
 
 
 def _normalize(text: str | None) -> str | None:
@@ -101,11 +109,11 @@ def _normalize(text: str | None) -> str | None:
 
 
 def parse_categories(remark: str | None) -> list[str]:
-    """Split a class remark into its listed canonical categories.
+    """把課程 remark 拆解成其列出的標準類別。
 
-    A remark may hold up to three categories separated by ``、`` or ``,``
-    (e.g. ``"社會通、人文通"``). Unrecognised tokens are silently dropped,
-    and duplicates are removed while preserving order.
+    一個 remark 最多可列三個類別，以「、」「，」等分隔（例如「社會通、人文通」）；
+    也支援「跨領域(人文、社會)」這類含括號的寫法。無法辨識的詞會被略過，
+    重複者保留先後順序去重。
     """
     if not remark:
         return []
@@ -117,21 +125,37 @@ def parse_categories(remark: str | None) -> list[str]:
     return seen
 
 
+def _foreign_category_from_name(name: str | None) -> str | None:
+    """當 remark 無法判別時（如爬蟲統一標的「外文通識」），改用課名判斷英外文。
+
+    * 課名含「大學英文」              → ENGLISH（大學英文）
+    * 課名含「大學外文」或「選修英文」→ FOREIGN_ALT（免修英文可用的外文）
+    * 其餘                            → None
+    """
+    if not name:
+        return None
+    if "大學英文" in name:
+        return ENGLISH
+    if "大學外文" in name or "選修英文" in name:
+        return FOREIGN_ALT
+    return None
+
+
 def categorize_selection(
     class_: Class | None, selected: SelectedClass | None
 ) -> str | None:
-    """Return which GE category this selection's credits count toward.
+    """判斷這筆選課的學分應計入哪個通識類別。
 
-    Resolution order:
-    1. If ``SelectedClass.chosen_category`` is set and matches one of the
-       categories listed in the class's remark, use it.
-    2. Otherwise fall back to the first listed category, so credits are
-       never silently dropped just because the student hasn't picked yet.
-    3. If the remark has no recognisable category at all, return ``None``.
+    判斷順序：
+    1. 若 ``SelectedClass.chosen_category`` 有設定且在 remark 列出的類別中，採用之。
+    2. 否則採用 remark 第一個列出的類別，避免學生尚未選時學分被忽略。
+    3. 若 remark 無法對應任何類別（例如「外文通識」），改用課名判斷英/外文。
+    4. 都無法判別則回傳 ``None``。
     """
     options = parse_categories(class_.remark) if class_ else []
     if not options:
-        return None
+        # remark 判不出來 → 退而用課名辨識大學英文 / 大學外文 / 選修英文
+        return _foreign_category_from_name(getattr(class_, "name", None)) if class_ else None
 
     chosen_raw = getattr(selected, "chosen_category", None) if selected else None
     chosen = _normalize(chosen_raw)
@@ -141,12 +165,25 @@ def categorize_selection(
     return options[0]
 
 
+def _parse_foreign_lang(name: str | None) -> tuple[str, str] | None:
+    """從大學外文課程名稱解析出學期和語種。
+
+    例如 "大學外文（一）：日文" → ("一", "日文")
+    無法解析（非外文課程格式）則回傳 None。
+    """
+    if not name:
+        return None
+    m = _FOREIGN_LANG_RE.match(name.strip())
+    if m:
+        return m.group(1), m.group(2)  # (學期, 語種)
+    return None
+
+
 # --- Exemption helpers -------------------------------------------------------
 
 def is_exempt_from_computer(department: Department | None) -> bool:
-    # Departments whose own curriculum already covers 資訊 (統計、資管、
-    # 應數、資科、地政測資組…) are encoded by setting ``computer_max`` to 0
-    # — i.e. no 資訊通識 credits may count toward their students' total.
+    # 本身課程已涵蓋資訊的科系（統計、資管、應數、資科、地政測資組…）
+    # 以 ``computer_max = 0`` 標記，代表其學生的資訊通識學分不計入。
     return department is not None and department.computer_max == 0
 
 
@@ -161,9 +198,8 @@ def get_student(db: Session, student_id: int) -> Student | None:
 
 
 def get_passed_selections(db: Session, student_id: int) -> list[SelectedClass]:
-    """Fetch every passed ``SelectedClass`` row with its ``Class`` eagerly
-    joined, so the caller can read both the class metadata (credits, remark,
-    core) and the student's ``chosen_category`` without N+1 queries."""
+    """取出該生所有「已通過」的 SelectedClass，並一併 eager join 對應的 Class，
+    讓呼叫端能同時讀到課程資訊（學分、remark、core）與 chosen_category，避免 N+1 查詢。"""
     return (
         db.query(SelectedClass)
         .options(joinedload(SelectedClass.class_))
@@ -180,7 +216,7 @@ def get_passed_selections(db: Session, student_id: int) -> list[SelectedClass]:
 @dataclass
 class CategoryStatus:
     earned: int
-    counted: int        # earned capped at ``maximum``
+    counted: int        # earned 受 ``maximum`` 上限後的實際計入學分
     required: int
     maximum: int | None
     met: bool
@@ -197,16 +233,30 @@ class PEStatus:
 
 @dataclass
 class CoreGEStatus:
-    # Number of distinct GE categories (人文/社會/自然) where the student
-    # has passed at least one 核心通識 course.
+    # 學生在幾個不同的通識領域（人文/社會/自然）至少通過一門核心通識課。
     earned_categories: int
     required_categories: int
-    earned_category_list: list   # which category keys are covered
+    earned_category_list: list   # 已涵蓋的類別代號
     met: bool
     shortfall: int
 
 
-# Only 人文、社會、自然 have 核心通識 courses.
+@dataclass
+class ForeignPairStatus:
+    # 免修大學英文者的補修狀態，需擇一達成（僅在 student.eng_passed = True 時有意義）：
+    #   方案一 selective_english：兩堂不同的選修英文共 6 學分
+    #   方案二 foreign_pair：同語種大學外文（一）＋（二）
+    language: str | None        # 大學外文配對的語種（如 "日文"）；選修英文方案或無配對則為 None
+    has_first_sem: bool         # 是否有大學外文（一）
+    has_second_sem: bool        # 是否有大學外文（二）
+    valid: bool                 # 是否有任一方案達成
+    credits: int                # 計入 english bucket 的學分（未達標時為「部分學分」）
+    plan: str | None = None     # 達成的方案："selective_english" / "foreign_pair" / None
+    # 實際計入學分的課程名稱（顯示用）。例如部分達成時，可讓前端列出已修的外文/選修英文課
+    courses: list[str] = field(default_factory=list)
+
+
+# 只有人文、社會、自然 三領域有核心通識課程。
 _CORE_GE_BUCKETS: frozenset[str] = frozenset({HUMANITIES, SOCIAL, SCIENCES})
 
 CORE_GE_REQUIRED = 2
@@ -219,35 +269,115 @@ def _empty_credits() -> dict[str, int]:
     }
 
 
+def _validate_foreign_pair(
+    foreign_classes: list[Class], required_credits: int = 6
+) -> ForeignPairStatus:
+    """驗證免修英文的補修課程是否達成任一方案。
+
+    傳入的是學生（已免修英文）修過的「大學外文 / 選修英文」課程：
+
+    * 方案二 foreign_pair：同一語種同時有大學外文（一）和（二）→ 有效，計入該配對學分。
+    * 方案一 selective_english：兩堂(以上)不同的選修英文且共 ``required_credits`` 學分 → 有效。
+    * 兩案皆未達成：回傳「部分學分」——取學分最多的單一來源（同語種大學外文總和，
+      或選修英文總和），不同語種之間不加總，``valid = False``。
+
+    回傳的 ``credits`` 即為應計入 english bucket 的學分。
+    """
+    # 大學外文：{語種: {學期: 學分}} 與 {語種: {學期: 課名}}
+    lang_groups: dict[str, dict[str, int]] = {}
+    lang_names: dict[str, dict[str, str]] = {}
+    # 選修英文：{課名: 學分}（不同課名才算不同課；同名只算一次）
+    selective: dict[str, int] = {}
+
+    for cls in foreign_classes:
+        name = (cls.name or "").strip()
+        if "選修英文" in name:
+            selective[name] = cls.credits
+            continue
+        parsed = _parse_foreign_lang(name)
+        if parsed:
+            sem, lang = parsed
+            lang_groups.setdefault(lang, {})[sem] = cls.credits
+            lang_names.setdefault(lang, {})[sem] = name
+
+    # 方案二：同語種大學外文（一）＋（二）
+    for lang, sems in lang_groups.items():
+        if "一" in sems and "二" in sems:
+            return ForeignPairStatus(
+                language=lang,
+                has_first_sem=True,
+                has_second_sem=True,
+                valid=True,
+                credits=sems["一"] + sems["二"],
+                plan="foreign_pair",
+                courses=[lang_names[lang]["一"], lang_names[lang]["二"]],
+            )
+
+    # 方案一：兩堂以上不同的選修英文，共達 required_credits 學分
+    if len(selective) >= 2 and sum(selective.values()) >= required_credits:
+        return ForeignPairStatus(
+            language=None,
+            has_first_sem=False,
+            has_second_sem=False,
+            valid=True,
+            credits=sum(selective.values()),
+            plan="selective_english",
+            courses=list(selective),
+        )
+
+    # 皆未達標：取學分最多的單一來源作為「部分學分」
+    best_credits = 0
+    best_lang: str | None = None
+    best_courses: list[str] = []
+    for lang, sems in lang_groups.items():
+        total = sum(sems.values())
+        if total > best_credits:
+            best_credits, best_lang = total, lang
+            best_courses = list(lang_names[lang].values())
+    sel_total = sum(selective.values())
+    if sel_total > best_credits:
+        best_credits, best_lang = sel_total, None
+        best_courses = list(selective)
+
+    if best_lang is not None:
+        sems = lang_groups[best_lang]
+        return ForeignPairStatus(
+            language=best_lang,
+            has_first_sem="一" in sems,
+            has_second_sem="二" in sems,
+            valid=False,
+            credits=best_credits,
+            plan=None,
+            courses=best_courses,
+        )
+    return ForeignPairStatus(
+        language=None,
+        has_first_sem=False,
+        has_second_sem=False,
+        valid=False,
+        credits=best_credits,
+        plan=None,
+        courses=best_courses,
+    )
+
+
 def tally_credits(
     selections: Iterable[SelectedClass],
     student: Student,
     department: Department,
-) -> tuple[dict[str, int], set, int]:
-    """Walk a student's passed selections and bucket their credits.
+) -> tuple[dict[str, int], set, int, ForeignPairStatus]:
+    """走訪學生已通過的選課，將學分歸入各通識類別。
 
-    For each selection we look up the student's chosen category (or the
-    first-listed fallback) and route the class's credits into one bucket
-    only, applying the exemption rules:
+    免修英文者（eng_passed = True）的大學外文 / 選修英文課程不直接計入 english，
+    而是先收集，迴圈結束後透過 _validate_foreign_pair 依「免修補修雙方案」驗證，
+    再把應計學分（達標 6 學分，或未達標的部分學分）加入 english。
 
-    * 資訊 (chosen, single- or multi-category) → skipped if the dept is
-      computer-exempt; otherwise counted toward ``computer``.
-    * 大學英文 → skipped if the student is English-exempt; otherwise
-      counted toward ``english``.
-    * 大學外文 → only counted (toward ``english``) if the student is
-      English-exempt; ignored otherwise.
-    * PE → counted as a course toward ``pe_courses`` (not credits).
-    * everything else → counted toward its chosen category.
-
-    Also tracks ``core_categories``: the set of distinct GE category keys
-    (limited to 人文/社會/自然) where the student has passed at least one
-    ``Class.core = True`` course.
-
-    Returns ``(credits, core_categories, pe_courses)``.
+    回傳 ``(credits, core_categories, pe_courses, foreign_pair_status)``。
     """
     credits = _empty_credits()
     core_categories: set[str] = set()
     pe_courses = 0
+    foreign_classes: list[Class] = []
 
     computer_exempt = is_exempt_from_computer(department)
     english_exempt = is_exempt_from_english(student)
@@ -276,7 +406,9 @@ def tally_credits(
         elif category == FOREIGN_ALT:
             if not english_exempt:
                 continue
-            bucket = ENGLISH
+            # 先收集，迴圈後驗證配對
+            foreign_classes.append(class_)
+            continue
         else:
             bucket = category
 
@@ -284,12 +416,16 @@ def tally_credits(
         if class_.core and bucket in _CORE_GE_BUCKETS:
             core_categories.add(bucket)
 
-    return credits, core_categories, pe_courses
+    # 依免修補修雙方案驗證外文/選修英文，並把應計學分加入 english
+    foreign_pair = _validate_foreign_pair(foreign_classes, department.foreign)
+    credits[ENGLISH] += foreign_pair.credits
+
+    return credits, core_categories, pe_courses, foreign_pair
 
 
 # --- Requirement evaluation --------------------------------------------------
 
-# School-wide minimum, excluding PE.
+# 全校最低畢業學分門檻（不含體育）。
 TOTAL_REQUIRED_EXCLUDING_PE = 28
 
 
@@ -310,13 +446,15 @@ def evaluate(
     core_categories: set[str],
     pe_courses: int,
     department: Department,
+    foreign_pair: ForeignPairStatus,
 ) -> dict:
-    """Compare aggregated credits against the department's requirements."""
+    """將彙總後的學分與該科系的畢業門檻逐項比對。"""
     categories: dict[str, CategoryStatus] = {
-        # ``humanities`` and ``foreign`` are stored as single integers on
-        # the department row — treat them as the minimum required, with
-        # no upper cap.
-        HUMANITIES: _status(credits[HUMANITIES], department.humanities_min, department.humanities_max),
+        # 人文通識現有 min/max（max 可為 null 代表無上限）；
+        # foreign（大學英文門檻）仍為單一整數，視為最低要求、無上限。
+        HUMANITIES: _status(
+            credits[HUMANITIES], department.humanities_min, department.humanities_max
+        ),
         SOCIAL: _status(credits[SOCIAL], department.social_min, department.social_max),
         SCIENCES: _status(credits[SCIENCES], department.sciences_min, department.sciences_max),
         COMPUTER: _status(credits[COMPUTER], department.computer_min, department.computer_max),
@@ -343,8 +481,8 @@ def evaluate(
         shortfall=max(CORE_GE_REQUIRED - earned_core, 0),
     )
 
-    # Total excluding PE: sum each bucket capped at its ``maximum``, so
-    # over-earning in one area cannot paper over a deficit in another.
+    # 不含體育的總學分：各類別「受上限後」的學分加總，避免某類別超修
+    # 來掩蓋另一類別的不足。
     counted_total = sum(s.counted for s in categories.values())
     total_status = CategoryStatus(
         earned=sum(credits.values()),
@@ -358,6 +496,7 @@ def evaluate(
     return {
         "categories": {k: asdict(v) for k, v in categories.items()},
         "core_ge": asdict(core_ge_status),
+        "foreign_pair": asdict(foreign_pair),
         "pe": asdict(pe_status),
         "total_excluding_pe": asdict(total_status),
         "graduation_ready": (
@@ -372,11 +511,9 @@ def evaluate(
 # --- Public entry point ------------------------------------------------------
 
 def calculate_score(db: Session, student_id: int) -> dict:
-    """Compute graduation audit information for ``student_id``.
+    """計算 ``student_id`` 的畢業審核資訊。
 
-    Returns a JSON-serialisable dictionary containing per-category credit
-    counts, whether each requirement is met, the PE course count, and the
-    overall total.
+    回傳可序列化為 JSON 的字典，包含各類別學分、各項是否達標、體育門數，以及總學分。
     """
     student = get_student(db, student_id)
     if student is None:
@@ -391,8 +528,8 @@ def calculate_score(db: Session, student_id: int) -> dict:
         return {"error": "department not found", "student_id": student_id}
 
     selections = get_passed_selections(db, student_id)
-    credits, core_categories, pe_courses = tally_credits(selections, student, department)
-    result = evaluate(credits, core_categories, pe_courses, department)
+    credits, core_categories, pe_courses, foreign_pair = tally_credits(selections, student, department)
+    result = evaluate(credits, core_categories, pe_courses, department, foreign_pair)
     result["student_id"] = student.id
     result["main_department_id"] = department.id
     return result
@@ -464,6 +601,15 @@ def calculate_score(db: Session, student_id: int) -> dict:
     "earned_category_list": ["social"], # 修了哪些核通類別
     "met": false,                       # 是否達標 (earned >= required)
     "shortfall": 1                      # 差多少達標
+  },
+  "foreign_pair": {                     # 僅對 免修英文的人 有意義
+    "language": "日文",                 # 大學外文配對的語種 (選修英文方案或無配對則為 null)
+    "has_first_sem": true,              # 是否有大學外文（一）
+    "has_second_sem": true,             # 是否有大學外文（二）
+    "valid": true,                      # 是否達成任一補修方案
+    "credits": 6,                       # 計入 english 的學分 (未達標時為部分學分)
+    "plan": "foreign_pair",             # 達成方案: "foreign_pair"/"selective_english"/null
+    "courses": ["大學外文（一）：日文", "大學外文（二）：日文"]  # 計入學分的課程 (顯示用)
   },
   "pe": {
     "earned_courses": 1,
