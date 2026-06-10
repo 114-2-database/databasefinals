@@ -152,7 +152,7 @@ def _result_context(
     if department is None:
         return _demo_dashboard_context()
 
-    credits, core_categories, pe_courses = tally_credits(
+    credits, core_categories, pe_courses, foreign_pair = tally_credits(
         selections=passed_rows,
         student=student,
         department=department,
@@ -175,6 +175,7 @@ def _result_context(
         core_categories=core_categories,
         pe_courses=pe_courses,
         department=department,
+        foreign_pair=foreign_pair,
     )
 
     categories: Mapping[str, Mapping[str, int]] = result["categories"]  # type: ignore[assignment]

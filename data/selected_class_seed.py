@@ -19,11 +19,51 @@ How to use in your main project:
 
 from __future__ import annotations
 
+import re
 import random
 from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Lightweight remark parser (mirrors app.core.algorithms logic)
+# ---------------------------------------------------------------------------
+
+_REMARK_SPLIT_RE = re.compile(r"[、，,/（）()]+|\s{2,}")
+
+_REMARK_TO_CATEGORY: dict[str, str] = {
+    "hum": "humanities", "humanities": "humanities",
+    "人文": "humanities", "人文通": "humanities", "人文通識": "humanities",
+    "soc": "social", "social": "social",
+    "社會": "social", "社會通": "social", "社會通識": "social",
+    "nat": "sciences", "sciences": "sciences", "natural": "sciences",
+    "自然": "sciences", "自然通": "sciences", "自然通識": "sciences",
+    "info": "computer", "computer": "computer",
+    "資訊": "computer", "資訊通": "computer", "資訊通識": "computer",
+    "跨領域資訊": "computer", "跨領域資訊通": "computer", "跨領域資訊通識": "computer",
+    "res": "residential", "residential": "residential", "college": "residential",
+    "書院": "residential", "書院通": "residential", "書院通識": "residential",
+    "chi": "chinese", "chinese": "chinese",
+    "中文": "chinese", "中文通": "chinese", "中文通識": "chinese", "大學中文": "chinese",
+    "eng": "english", "english": "english",
+    "英文": "english", "大學英文": "english",
+    "foreign": "foreign_alt", "foreign_alt": "foreign_alt",
+    "外文": "foreign_alt", "大學外文": "foreign_alt", "外文通識": "foreign_alt",
+    "pe": "pe", "體育": "pe",
+}
+
+
+def _parse_categories(remark: str | None) -> list[str]:
+    """Return the list of standard category keys found in a remark string."""
+    if not remark:
+        return []
+    seen: list[str] = []
+    for token in _REMARK_SPLIT_RE.split(remark):
+        cat = _REMARK_TO_CATEGORY.get(token.strip().lower())
+        if cat and cat not in seen:
+            seen.append(cat)
+    return seen
 
 SEMESTERS: tuple[str, ...] = ("1111", "1112", "1121", "1122", "1131", "1132", "1141", "1142")
 RANDOM_SEED: int = 20260609
@@ -39,6 +79,7 @@ class CourseInfo:
     name: str
     credits: int
     semester: str
+    remark: str  # raw remark from Class.remark; used to detect cross-domain courses
 
 
 def _admission_year(student_id: int) -> int:
@@ -273,9 +314,16 @@ def seed_selected_classes(
             class_id: int = int(getattr(class_row, "id"))
             credits: int = int(getattr(class_row, "credits"))
             class_name: str = str(getattr(class_row, "name", "")).strip()
+            remark: str = str(getattr(class_row, "remark", "") or "")
         except (TypeError, ValueError):
             continue
-        course = CourseInfo(class_id=class_id, name=class_name, credits=credits, semester=semester)
+        course = CourseInfo(
+            class_id=class_id,
+            name=class_name,
+            credits=credits,
+            semester=semester,
+            remark=remark,
+        )
         semester_courses[semester].append(course)
         class_map[class_id] = course
 
@@ -322,12 +370,24 @@ def seed_selected_classes(
                 key: tuple[int, int] = (student_id, course.class_id)
                 existing = existing_map.get(key)
                 if existing is None:
+                    # For cross-domain courses (remark lists 2+ categories),
+                    # randomly assign chosen_category so students can be
+                    # distributed across valid options.  Single-category or
+                    # unrecognised courses keep chosen_category = None, which
+                    # causes algorithms.py to fall back to the first listed
+                    # category automatically.
+                    categories: list[str] = _parse_categories(course.remark)
+                    chosen_category: str | None = None
+                    if len(categories) >= 2:
+                        chosen_category = _RNG.choice(categories)
+
                     session.add(
                         selected_class_model(
                             classid=course.class_id,
                             studentid=student_id,
                             ispassed=is_passed,
                             score=score,
+                            chosen_category=chosen_category,
                         )
                     )
                     existing_map[key] = True

@@ -70,6 +70,9 @@ class SelectedClass(Base):
     studentid = Column(Integer, ForeignKey('students.id'), primary_key=True, index=True)
     ispassed = Column(Boolean, default=False)
     score = Column(DECIMAL(10, 2), default=0.00)
+    # Student's chosen category for cross-domain courses (e.g. "social", "humanities").
+    # When None, algorithms.py defaults to the first category listed in Class.remark.
+    chosen_category = Column(String(32), nullable=True)
     
     class_ = relationship("Class", backref="selected_classes")
     student = relationship("Student", backref="selected_classes")
