@@ -85,7 +85,7 @@ _REMARK_TO_CATEGORY: dict[str, str] = {
     "英文": ENGLISH, "大學英文": ENGLISH,
     # 大學外文 — used to fulfil English requirement when student is exempt
     "foreign": FOREIGN_ALT, "foreign_alt": FOREIGN_ALT,
-    "外文": FOREIGN_ALT, "大學外文": FOREIGN_ALT,
+    "外文": FOREIGN_ALT, "大學外文": FOREIGN_ALT, "外文通識": FOREIGN_ALT,
     # 體育
     "pe": PE, "體育": PE,
 }

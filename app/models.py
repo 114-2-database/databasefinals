@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, DECIMAL, Date
+from sqlalchemy import Column, Integer, BigInteger, String, Text, DateTime, Boolean, ForeignKey, DECIMAL, Date
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -15,17 +15,18 @@ class Department(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), unique=True, nullable=False, index=True)
-    humanities = Column(Integer, nullable=False)
+    humanities_min = Column(Integer, nullable=False)
+    humanities_max = Column(Integer, nullable=True)
     social_min = Column(Integer, nullable=False)
-    social_max = Column(Integer, nullable=False)
+    social_max = Column(Integer, nullable=True)
     sciences_min = Column(Integer, nullable=False)
-    sciences_max = Column(Integer, nullable=False)
+    sciences_max = Column(Integer, nullable=True)
     computer_min = Column(Integer, nullable=False)
     computer_max = Column(Integer, nullable=False)
     residential_min = Column(Integer, nullable=False)
-    residential_max = Column(Integer, nullable=False)
+    residential_max = Column(Integer, nullable=True)
     chinese_min = Column(Integer, nullable=False)
-    chinese_max = Column(Integer, nullable=False)
+    chinese_max = Column(Integer, nullable=True)
     pe = Column(Integer, nullable=False)
     foreign = Column(Integer, nullable=False)
 
@@ -53,7 +54,7 @@ class Student(Base):
 class Class(Base):
     __tablename__ = "classes"
     
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(BigInteger, primary_key=True, index=True)
     name = Column(String(64), nullable=False, index=True)
     credits = Column(Integer, nullable=False)
     requiredOrElectiveCourse = Column(String(64), nullable=False, index=True)
@@ -65,7 +66,7 @@ class Class(Base):
 class SelectedClass(Base):
     __tablename__ = "selected_classes"
     
-    classid = Column(Integer, ForeignKey('classes.id'), primary_key=True, index=True)
+    classid = Column(BigInteger, ForeignKey('classes.id'), primary_key=True, index=True)
     studentid = Column(Integer, ForeignKey('students.id'), primary_key=True, index=True)
     ispassed = Column(Boolean, default=False)
     score = Column(DECIMAL(10, 2), default=0.00)
